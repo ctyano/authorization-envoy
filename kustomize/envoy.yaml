@@ -1,0 +1,144 @@
+---
+node:
+  id: authz-envoy-node-1
+  cluster: authz-cluster
+
+static_resources:
+  listeners:
+    - name: listener_0
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 8080 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route: { cluster: echoserver }
+                http_filters:
+                  - name: envoy.filters.http.wasm
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+                      config:
+                        configuration:
+                          "@type": type.googleapis.com/google.protobuf.StringValue
+                          value: |
+                            {
+                              "cga": [
+                                { "athenz": { "domain": "athenz", "role": "envoy-clients" } }
+                              ],
+                              "fga": {
+                                "cluster": "localhost",
+                                "path": "/zts/v1/domain/sys.auth/policy/signed",
+                                "authority": "athenz-zts-server.athenz",
+                                "refresh": 30000
+                              }
+                            }
+                        name: authz_filter
+                        root_id: authz_filter
+                        vm_config:
+                          vm_id: authz_filter_vm
+                          runtime: envoy.wasm.runtime.v8
+                          code:
+                            local:
+                              filename: /etc/envoy/authorization-envoy.wasm
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+    - name: localhost_listener_0
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 18080 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            path_separated_prefix: "/zts/v1"
+                          route:
+                            cluster: zts
+                            auto_host_rewrite: true
+                http_filters:
+                  - name: envoy.filters.http.lua
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                      inline_code: |
+                        function envoy_on_response(response_handle)
+                          response_handle:headers():add("Cache-Control", "public, max-age=60")
+                        end
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: echoserver
+      connect_timeout: 0.25s
+      type: STATIC # LOGICAL_DNS or STATIC
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: echoserver
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1
+                      port_value: 3000
+    - name: localhost
+      connect_timeout: 0.25s
+      type: STATIC # LOGICAL_DNS or STATIC
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: envoy
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1
+                      port_value: 18080
+    - name: zts
+      connect_timeout: 0.25s
+      type: LOGICAL_DNS
+      dns_lookup_family: V4_ONLY
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: zts
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: athenz-zts-server.athenz
+                      port_value: 4443
+      transport_socket: &transport_socket
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          common_tls_context:
+            tls_certificate_sds_secret_configs: &tls_certificate_sds_secret_configs_identity
+              - name: identity_sds
+                sds_config:
+                  path_config_source:
+                    path: /etc/envoy/config/identity_sds.yaml
+                  resource_api_version: V3
+            validation_context_sds_secret_config: &validation_context_sds_secret_config_ca
+              name: ca_sds
+              sds_config:
+                path_config_source:
+                  path: /etc/envoy/config/ca_sds.yaml
+                resource_api_version: V3

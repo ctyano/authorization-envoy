@@ -1,0 +1,59 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: authorization-envoy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: authorization-envoy
+  template:
+    metadata:
+      labels:
+        app: authorization-envoy
+    spec:
+      containers:
+        - name: envoy
+          image: ghcr.io/ctyano/authorization-envoy:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - envoy
+            - -c
+            - /etc/envoy/config/envoy.yaml
+            - -l
+            - debug
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/envoy/config
+              readOnly: true
+            - name: athenz-admin-keys
+              mountPath: /var/run/athenz
+              readOnly: true
+            - name: athenz-cacert
+              mountPath: /var/run/athenz/ca
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: authz-envoy-config
+        - name: athenz-admin-keys
+          secret:
+            secretName: athenz-admin-keys
+            defaultMode: 0555
+            items:
+              - key: athenz_admin.cert.pem
+                path: tls.crt
+              - key: athenz_admin.private.pem
+                path: tls.key
+        - name: athenz-cacert
+          secret:
+            secretName: athenz-cacert
+            defaultMode: 0555
+            items:
+              - key: ca.cert.pem
+                path: ca.crt
