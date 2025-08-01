@@ -15,6 +15,7 @@ import (
 )
 
 type Assertion struct {
+	Effect   string `json:effect`
 	Role     string `json:"role"`
 	Action   string `json:action`
 	Resource string `json:resource`
