@@ -37,6 +37,16 @@ spec:
             - name: athenz-cacert
               mountPath: /var/run/athenz/ca
               readOnly: true
+        - name: echoserver
+          image: docker.io/ealen/echo-server:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: echoserver
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3000"
       volumes:
         - name: config
           configMap:

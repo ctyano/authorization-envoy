@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -14,7 +15,9 @@ import (
 )
 
 type Assertion struct {
-	Role string `json:"role"`
+	Role     string `json:"role"`
+	Action   string `json:action`
+	Resource string `json:resource`
 }
 
 type Policy struct {
@@ -56,6 +59,8 @@ type pluginContext struct {
 	policyCluster   string
 	policyPath      string
 	policyAuthority string
+	actionHeader    string
+	resourceHeader  string
 	policyRefresh   uint32 // in milliseconds
 
 }
@@ -139,6 +144,7 @@ func (p *pluginContext) OnPluginStart(pluginConfigurationSize int) types.OnPlugi
 			return true
 		})
 		fmt.Printf("Coarse-Grained Authorization Config: %#v\n", p.constraints)
+		proxywasm.SetProperty([]string{"mode"}, []byte("cga"))
 	}
 
 	// fga stands for fine grained authorization
@@ -155,6 +161,8 @@ func (p *pluginContext) OnPluginStart(pluginConfigurationSize int) types.OnPlugi
 		p.policyCluster = strings.TrimSpace(fga.Get("cluster").String())
 		p.policyPath = strings.TrimSpace(fga.Get("path").String())
 		p.policyAuthority = strings.TrimSpace(fga.Get("authority").String())
+		p.actionHeader = strings.TrimSpace(fga.Get("actionheader").String())
+		p.resourceHeader = strings.TrimSpace(fga.Get("resourceheader").String())
 		p.policyRefresh = uint32(fga.Get("refresh").Int())
 		proxywasm.LogInfof("Fine-Grained Authorization Config: cluster=%s, path=%s, authority=%s, refresh=%d", p.policyCluster, p.policyPath, p.policyAuthority, p.policyRefresh)
 
@@ -198,6 +206,8 @@ func (ctx *httpContext) OnHttpRequestHeaders(numHeaders int, endOfStream bool) t
 		proxywasm.SendHttpResponse(401, nil, []byte("Invalid JWT"), -1)
 		return types.ActionPause
 	}
+	//mode, _ := proxywasm.GetProperty([]string{"mode"})
+	//if string(mode) == "fga" {
 	// Compare audience
 	if !strings.EqualFold(aud, ctx.plugin.policy.PolicyData.Domain) {
 		proxywasm.LogDebugf("Forbidden: audience mismatch: request[%s], expected[%s]", aud, ctx.plugin.policy.PolicyData.Domain)
@@ -205,11 +215,22 @@ func (ctx *httpContext) OnHttpRequestHeaders(numHeaders int, endOfStream bool) t
 		return types.ActionPause
 	}
 	// Compare scopes (scope and scp) with all roles in assertions
-	if !scopesMatchRoles(scopes, ctx.plugin.policy) {
-		proxywasm.LogDebugf("Forbidden: scope(s) not allowed: request[%v], expected[%v]", scopes, ctx.plugin.policy)
+	var assertions []Assertion
+	if assertions = matchedAssertions(aud, scopes, ctx.plugin.policy); assertions == nil {
+		proxywasm.LogDebugf("Forbidden: scope(s) not allowed: request[%#v], expected[%#v]", scopes, ctx.plugin.policy)
 		proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: scope(s) not allowed"), -1)
 		return types.ActionPause
 	}
+	action, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.actionHeader)
+	resource, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.resourceHeader)
+	proxywasm.LogDebugf("Attempting to check request header: %s[%s], %s[%s]", ctx.plugin.actionHeader, strings.ToLower(action), ctx.plugin.resourceHeader, strings.ToLower(resource))
+	if authorizeAccess(strings.ToLower(action), strings.ToLower(resource), assertions) {
+		proxywasm.SetProperty([]string{"result"}, []byte("authorized"))
+	} else {
+		proxywasm.SetProperty([]string{"result"}, []byte("unauthorized"))
+		return types.ActionPause
+	}
+	//}
 
 	// Save name for later in context
 	proxywasm.LogDebugf("Saved the audience in request_audience property: %s", aud)
@@ -281,6 +302,17 @@ func (p *pluginContext) fetchPolicy() {
 		})
 }
 
+var (
+	ErrInvalidJWT            = &customErr{"invalid jwt"}
+	ErrInvalidJWTPayload     = &customErr{"invalid jwt payload"}
+	ErrInvalidJWTPayloadJson = &customErr{"invalid jwt payload json"}
+)
+
+type customErr struct{ s string }
+
+func (e *customErr) Error() string          { return e.s }
+func (e *customErr) Errorf(err error) error { return fmt.Errorf("%s: %s", e.s, err) }
+
 // Extract aud (string) and scopes ([]string) from the JWT
 func extractAudAndScopesFromJWT(jwt string) (string, []string, error) {
 	parts := strings.Split(jwt, ".")
@@ -324,30 +356,38 @@ func extractAudAndScopesFromJWT(jwt string) (string, []string, error) {
 	return aud, scopes, nil
 }
 
-var (
-	ErrInvalidJWT            = &customErr{"invalid jwt"}
-	ErrInvalidJWTPayload     = &customErr{"invalid jwt payload"}
-	ErrInvalidJWTPayloadJson = &customErr{"invalid jwt payload json"}
-)
-
-type customErr struct{ s string }
-
-func (e *customErr) Error() string          { return e.s }
-func (e *customErr) Errorf(err error) error { return fmt.Errorf("%s: %s", e.s, err) }
-
-// Returns true if any of the scope names matches any role in assertions.
-func scopesMatchRoles(scopes []string, policy *JwsPolicyPayload) bool {
+// Returns all assertions matches with the roles in the scopes.
+func matchedAssertions(audience string, scopes []string, policy *JwsPolicyPayload) []Assertion {
 	if len(scopes) == 0 {
-		return false
+		return nil
 	}
-	roleSet := make(map[string]struct{})
+	roleSet := make(map[string]Assertion)
 	for _, p := range policy.PolicyData.Policies {
 		for _, a := range p.Assertions {
-			roleSet[a.Role] = struct{}{}
+			roleSet[a.Role] = a
 		}
 	}
+	var assertions []Assertion
 	for _, s := range scopes {
-		if _, found := roleSet[s]; found {
+		if _, found := roleSet[audience+":role."+s]; found {
+			a := roleSet[audience+":role."+s]
+			proxywasm.LogDebugf("assertion matched: request[%s], assertion[%#v]", audience+":role."+s, a)
+			assertions = append(assertions, a)
+		}
+	}
+	return assertions
+}
+
+// Returns true if the assertions match with the request
+func authorizeAccess(action, resource string, assertions []Assertion) bool {
+	if len(assertions) == 0 {
+		return false
+	}
+	for _, a := range assertions {
+		actionMatched, _ := path.Match(a.Action, action)
+		resourceMatched, _ := path.Match(a.Resource, resource)
+		if actionMatched && resourceMatched {
+			proxywasm.LogDebugf("assertion matched with request: action[%s], resource[%s]", action, resource)
 			return true
 		}
 	}

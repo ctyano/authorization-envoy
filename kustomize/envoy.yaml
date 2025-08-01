@@ -23,6 +23,14 @@ static_resources:
                         - match: { prefix: "/" }
                           route: { cluster: echoserver }
                 http_filters:
+                  - name: envoy.filters.http.lua
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                      inline_code: |
+                        function envoy_on_request(request_handle)
+                          request_handle:headers():add("x-athenz-action", request_handle:headers():get(":method"))
+                          request_handle:headers():add("x-athenz-resource", request_handle:headers():get(":path"))
+                        end
                   - name: envoy.filters.http.wasm
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
@@ -38,6 +46,8 @@ static_resources:
                                 "cluster": "localhost",
                                 "path": "/zts/v1/domain/sys.auth/policy/signed",
                                 "authority": "athenz-zts-server.athenz",
+                                "actionheader": "x-athenz-action",
+                                "resourceheader": "x-athenz-resource",
                                 "refresh": 30000
                               }
                             }
