@@ -224,15 +224,14 @@ func (ctx *httpContext) OnHttpRequestHeaders(numHeaders int, endOfStream bool) t
 	action, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.actionHeader)
 	resource, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.resourceHeader)
 	proxywasm.LogDebugf("Attempting to check request header: %s[%s], %s[%s]", ctx.plugin.actionHeader, strings.ToLower(action), ctx.plugin.resourceHeader, strings.ToLower(resource))
-	if authorizeAccess(strings.ToLower(action), strings.ToLower(resource), assertions) {
-		proxywasm.SetProperty([]string{"result"}, []byte("authorized"))
-	} else {
+	if !authorizeAccess(strings.ToLower(aud), strings.ToLower(action), strings.ToLower(resource), assertions) {
 		proxywasm.SetProperty([]string{"result"}, []byte("unauthorized"))
 		return types.ActionPause
 	}
 	//}
 
 	// Save name for later in context
+	proxywasm.SetProperty([]string{"result"}, []byte("authorized"))
 	proxywasm.LogDebugf("Saved the audience in request_audience property: %s", aud)
 	proxywasm.SetProperty([]string{"request_audience"}, []byte(aud))
 
@@ -379,13 +378,14 @@ func matchedAssertions(audience string, scopes []string, policy *JwsPolicyPayloa
 }
 
 // Returns true if the assertions match with the request
-func authorizeAccess(action, resource string, assertions []Assertion) bool {
+func authorizeAccess(audience, action, resource string, assertions []Assertion) bool {
 	if len(assertions) == 0 {
 		return false
 	}
 	for _, a := range assertions {
+		proxywasm.LogDebugf("checking assertion with request: assertion{action[%s], resource[%s]}, request{action[%s], resource[%s]}", a.Action, a.Resource, action, audience+":"+resource)
 		actionMatched, _ := path.Match(a.Action, action)
-		resourceMatched, _ := path.Match(a.Resource, resource)
+		resourceMatched, _ := path.Match(a.Resource, audience+":"+resource)
 		if actionMatched && resourceMatched {
 			proxywasm.LogDebugf("assertion matched with request: action[%s], resource[%s]", action, resource)
 			return true
