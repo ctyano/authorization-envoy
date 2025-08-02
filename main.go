@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"path"
 	"strings"
 	"time"
 
@@ -371,7 +370,7 @@ func matchedAssertions(audience string, scopes []string, policy *JwsPolicyPayloa
 	for _, s := range scopes {
 		if _, found := roleSet[audience+":role."+s]; found {
 			a := roleSet[audience+":role."+s]
-			proxywasm.LogDebugf("assertion matched: request[%s], assertion[%#v]", audience+":role."+s, a)
+			proxywasm.LogDebugf("assertion found for role: request[%s], assertion[%#v]", audience+":role."+s, a)
 			assertions = append(assertions, a)
 		}
 	}
@@ -384,12 +383,20 @@ func authorizeAccess(audience, action, resource string, assertions []Assertion) 
 		return false
 	}
 	for _, a := range assertions {
-		proxywasm.LogDebugf("checking assertion with request: assertion{action[%s], resource[%s]}, request{action[%s], resource[%s]}", a.Action, a.Resource, action, audience+":"+resource)
-		actionMatched, _ := path.Match(a.Action, action)
-		resourceMatched, _ := path.Match(a.Resource, audience+":"+resource)
-		if actionMatched && resourceMatched {
-			proxywasm.LogDebugf("assertion matched with request: action[%s], resource[%s]", action, resource)
-			return true
+		proxywasm.LogDebugf("checking assertion with request: assertion{effect[%s], action[%s], resource[%s]}, request{action[%s], resource[%s]}", a.Effect, a.Action, a.Resource, action, audience+":"+resource)
+		validator, err := NewAssertionValidator(a.Effect, a.Action, a.Resource)
+		if err != nil {
+			proxywasm.LogWarnf("assertion validator failed to initialize: effect[%s], action[%s], resource[%s]", a.Effect, a.Action, a.Resource)
+			return false
+		}
+		// deny policies come first in rolePolicies, so it will return first before allow policies is checked
+		if strings.EqualFold(validator.ResourceDomain, audience) &&
+			validator.ActionRegexp.MatchString(strings.ToLower(action)) &&
+			validator.ResourceRegexp.MatchString(strings.ToLower(resource)) {
+			proxywasm.LogDebugf("assertion matched with request: action[%s], resource[%s], effect[%v]", action, resource, (validator.Effect == nil))
+			if validator.Effect == nil {
+				return true
+			}
 		}
 	}
 	return false
