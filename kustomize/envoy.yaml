@@ -85,7 +85,8 @@ static_resources:
                               },
                               "fga": {
                                 "cluster": "localhost",
-                                "path": "/zts/v1/domain/sys.auth/policy/signed",
+                                "path": "/zts/v1/domain/{{domain}}/policy/signed",
+                                "domains": ["sys.auth", "athenz"],
                                 "authority": "athenz-zts-server.athenz",
                                 "actionheader": ":method",
                                 "resourceheader": ":path",

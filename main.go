@@ -56,10 +56,11 @@ type pluginContext struct {
 	constraints                []Constraint
 
 	fineGrainedAuthorization bool
-	policy                   *JwsPolicyPayload
+	policy                   []*JwsPolicyPayload
 	lastUpdated              int64 // UnixNano (optional)
 	policyCluster            string
 	policyPath               string
+	policyDomains            []string
 	policyAuthority          string
 	actionHeader             string
 	resourceHeader           string
@@ -161,11 +162,15 @@ func (p *pluginContext) OnPluginStart(pluginConfigurationSize int) types.OnPlugi
 	if fga.Exists() && fga.Type != gjson.Null {
 		p.policyCluster = strings.TrimSpace(fga.Get("cluster").String())
 		p.policyPath = strings.TrimSpace(fga.Get("path").String())
+		fga.Get("domains").ForEach(func(_, policyDomain gjson.Result) bool {
+			p.policyDomains = append(p.policyDomains, strings.TrimSpace(policyDomain.String()))
+			return true
+		})
 		p.policyAuthority = strings.TrimSpace(fga.Get("authority").String())
 		p.actionHeader = strings.TrimSpace(fga.Get("actionheader").String())
 		p.resourceHeader = strings.TrimSpace(fga.Get("resourceheader").String())
 		p.policyRefresh = uint32(fga.Get("refresh").Int())
-		proxywasm.LogInfof("Fine-Grained Authorization Config: cluster=%s, path=%s, authority=%s, refresh=%d", p.policyCluster, p.policyPath, p.policyAuthority, p.policyRefresh)
+		proxywasm.LogInfof("Fine-Grained Authorization Config: cluster=%s, path=%s, domains=[%#v], authority=%s, refresh=%d", p.policyCluster, p.policyPath, p.policyDomains, p.policyAuthority, p.policyRefresh)
 
 		if err := proxywasm.SetTickPeriodMilliSeconds(p.policyRefresh); err != nil {
 			proxywasm.LogCriticalf("Failed to set tick period: %v", err)
@@ -229,43 +234,30 @@ func (ctx *httpContext) OnHttpRequestHeaders(numHeaders int, endOfStream bool) t
 	}
 
 	if ctx.plugin.fineGrainedAuthorization {
-		// Compare audience
-		if !strings.EqualFold(aud, ctx.plugin.policy.PolicyData.Domain) {
-			proxywasm.LogWarnf("Forbidden: audience mismatch: request[%s], expected[%s]", aud, ctx.plugin.policy.PolicyData.Domain)
-			proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: audience mismatch"), -1)
-			return types.ActionPause
+		for _, policy := range ctx.plugin.policy {
+			// Compare audience
+			if !strings.EqualFold(aud, policy.PolicyData.Domain) {
+				proxywasm.LogWarnf("Forbidden: audience mismatch: request[%s], expected[%s]", aud, policy.PolicyData.Domain)
+				proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: audience mismatch"), -1)
+				return types.ActionPause
+			}
+			// Compare scopes (scope and scp) with all roles in assertions
+			var assertions []Assertion
+			if assertions = getRoleAssertions(aud, scopes, policy); assertions == nil {
+				proxywasm.LogWarnf("Forbidden: scope(s) not allowed: request[%#v], expected[%#v]", scopes, policy)
+				proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: scope(s) not allowed"), -1)
+				return types.ActionPause
+			}
+			actionValue, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.actionHeader)
+			resourceValue, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.resourceHeader)
+			action := strings.ToLower(actionValue)
+			resource := strings.ToLower(resourceValue)
+			proxywasm.LogDebugf("Attempting to check request header: %s[%s], %s[%s]", ctx.plugin.actionHeader, action, ctx.plugin.resourceHeader, resource)
+			if !authorizePolicyAccess(aud, action, resource, assertions) {
+				proxywasm.SetProperty([]string{"result"}, []byte("unauthorized"))
+				return types.ActionPause
+			}
 		}
-		// Compare scopes (scope and scp) with all roles in assertions
-		var assertions []Assertion
-		if assertions = getRoleAssertions(aud, scopes, ctx.plugin.policy); assertions == nil {
-			proxywasm.LogWarnf("Forbidden: scope(s) not allowed: request[%#v], expected[%#v]", scopes, ctx.plugin.policy)
-			proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: scope(s) not allowed"), -1)
-			return types.ActionPause
-		}
-		actionValue, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.actionHeader)
-		resourceValue, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.resourceHeader)
-		action := strings.ToLower(actionValue)
-		resource := strings.ToLower(resourceValue)
-		proxywasm.LogDebugf("Attempting to check request header: %s[%s], %s[%s]", ctx.plugin.actionHeader, action, ctx.plugin.resourceHeader, resource)
-		if !authorizePolicyAccess(aud, action, resource, assertions) {
-			proxywasm.SetProperty([]string{"result"}, []byte("unauthorized"))
-			return types.ActionPause
-		}
-	}
-
-	// Save name for later in context
-	proxywasm.SetProperty([]string{"result"}, []byte("authorized"))
-	proxywasm.LogDebugf("Saved the audience in request_audience property: %s", aud)
-	proxywasm.SetProperty([]string{"request_audience"}, []byte(aud))
-
-	return types.ActionContinue
-}
-
-// OnHttpResponseHeaders implements types.HttpContext.
-func (*httpContext) OnHttpResponseHeaders(_ int, _ bool) types.Action {
-	resultBytes, _ := proxywasm.GetProperty([]string{"result"})
-	if err := proxywasm.AddHttpResponseHeader("x-authorization-envoy-wasm", string(resultBytes)); err != nil {
-		proxywasm.LogCriticalf("Failed to set response constant header: %v", err)
 	}
 
 	return types.ActionContinue
@@ -273,48 +265,58 @@ func (*httpContext) OnHttpResponseHeaders(_ int, _ bool) types.Action {
 
 // Fetch the JWS policy via POST, as required.
 func (p *pluginContext) fetchPolicy() {
-	headers := [][2]string{
-		{":method", "POST"},
-		{":path", p.policyPath},
-		{":authority", p.policyAuthority},
-		{"content-type", "application/json"},
-	}
-	reqBody := `{"policyVersions":{"":""}}` // As per your curl command
+	for _, domain := range p.policyDomains {
+		path := ReplacePlaceholders(p.policyPath, map[string]string{"domain": domain})
+		headers := [][2]string{
+			{":method", "POST"},
+			{":path", path},
+			{":authority", p.policyAuthority},
+			{"content-type", "application/json"},
+		}
+		reqBody := `{"policyVersions":{"":""}}` // As per your curl command
 
-	proxywasm.LogInfof("Attempting to request policy to cluster[%s], path[%s], authority[%s]", p.policyCluster, p.policyPath, p.policyAuthority)
-	proxywasm.DispatchHttpCall(
-		p.policyCluster, headers[:], []byte(reqBody), nil, 10000,
-		func(numHeaders, bodySize, numTrailers int) {
-			body, err := proxywasm.GetHttpCallResponseBody(0, bodySize)
-			if err != nil {
-				proxywasm.LogCriticalf("Failed to get policy body: %v", err)
-				return
-			}
-			var jws map[string]interface{}
-			if err := json.Unmarshal(body, &jws); err != nil {
-				proxywasm.LogCriticalf("Failed to parse JWS: %v", err)
-				return
-			}
-			payloadB64, ok := jws["payload"].(string)
-			if !ok {
-				proxywasm.LogCritical("Policy missing payload")
-				return
-			}
-			payloadJSON, err := base64.RawURLEncoding.DecodeString(payloadB64)
-			if err != nil {
-				proxywasm.LogCriticalf("Failed to decode policy payload: %v", err)
-				return
-			}
-			var policyPayload JwsPolicyPayload
-			if err := json.Unmarshal(payloadJSON, &policyPayload); err != nil {
-				proxywasm.LogCriticalf("Failed to parse policy payload: %v", err)
-				return
-			}
-			p.policy = &policyPayload
-			p.lastUpdated = time.Now().UnixNano()
-			proxywasm.LogInfo("Policy loaded/refreshed successfully")
-			proxywasm.LogInfof("Policy:\n%#v\n", policyPayload)
-		})
+		proxywasm.LogInfof("Attempting to request policy to cluster[%s], path[%s], authority[%s]", p.policyCluster, path, p.policyAuthority)
+		proxywasm.DispatchHttpCall(
+			p.policyCluster, headers[:], []byte(reqBody), nil, 10000,
+			func(numHeaders, bodySize, numTrailers int) {
+				body, err := proxywasm.GetHttpCallResponseBody(0, bodySize)
+				if err != nil {
+					proxywasm.LogCriticalf("Failed to get policy body: %v", err)
+					return
+				}
+				var jws map[string]interface{}
+				if err := json.Unmarshal(body, &jws); err != nil {
+					proxywasm.LogCriticalf("Failed to parse JWS: %v", err)
+					return
+				}
+				payloadB64, ok := jws["payload"].(string)
+				if !ok {
+					proxywasm.LogCritical("Policy missing payload")
+					return
+				}
+				payloadJSON, err := base64.RawURLEncoding.DecodeString(payloadB64)
+				if err != nil {
+					proxywasm.LogCriticalf("Failed to decode policy payload: %v", err)
+					return
+				}
+				var policyPayload JwsPolicyPayload
+				if err := json.Unmarshal(payloadJSON, &policyPayload); err != nil {
+					proxywasm.LogCriticalf("Failed to parse policy payload: %v", err)
+					return
+				}
+				p.policy = append(p.policy, &policyPayload)
+				p.lastUpdated = time.Now().UnixNano()
+				proxywasm.LogInfo("Policy loaded/refreshed successfully")
+				proxywasm.LogInfof("Policy:\n%#v\n", policyPayload)
+			})
+	}
+}
+
+func ReplacePlaceholders(s string, values map[string]string) string {
+	for k, v := range values {
+		s = strings.ReplaceAll(s, "{{"+k+"}}", v)
+	}
+	return s
 }
 
 var (
