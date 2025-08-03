@@ -86,17 +86,18 @@ static_resources:
                               "fga": {
                                 "cluster": "localhost",
                                 "path": "/zts/v1/domain/{{domain}}/policy/signed",
-                                "domains": ["sys.auth", "athenz"],
+                                "domains": {
+                                  "static": ["sys.auth", "athenz"]
+                                },
                                 "authority": "athenz-zts-server.athenz",
                                 "actionheader": ":method",
                                 "resourceheader": ":path",
                                 "refresh": 30000
                               }
                             }
-                        name: authz_filter
-                        root_id: authz_filter
+                        name: authz_wasm_filter
                         vm_config:
-                          vm_id: authz_filter_vm
+                          vm_id: authz_wasm_filter_vm
                           runtime: envoy.wasm.runtime.v8
                           code:
                             local:

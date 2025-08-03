@@ -162,10 +162,12 @@ func (p *pluginContext) OnPluginStart(pluginConfigurationSize int) types.OnPlugi
 	if fga.Exists() && fga.Type != gjson.Null {
 		p.policyCluster = strings.TrimSpace(fga.Get("cluster").String())
 		p.policyPath = strings.TrimSpace(fga.Get("path").String())
-		fga.Get("domains").ForEach(func(_, policyDomain gjson.Result) bool {
-			p.policyDomains = append(p.policyDomains, strings.TrimSpace(policyDomain.String()))
-			return true
-		})
+		if fga.Get("domains.static").Exists() && fga.Get("domains.static").Type != gjson.Null {
+			fga.Get("domains.static").ForEach(func(_, policyDomain gjson.Result) bool {
+				p.policyDomains = append(p.policyDomains, strings.TrimSpace(policyDomain.String()))
+				return true
+			})
+		}
 		p.policyAuthority = strings.TrimSpace(fga.Get("authority").String())
 		p.actionHeader = strings.TrimSpace(fga.Get("actionheader").String())
 		p.resourceHeader = strings.TrimSpace(fga.Get("resourceheader").String())
@@ -275,39 +277,39 @@ func (p *pluginContext) fetchPolicy() {
 		}
 		reqBody := `{"policyVersions":{"":""}}` // As per your curl command
 
-		proxywasm.LogInfof("Attempting to request policy to cluster[%s], path[%s], authority[%s]", p.policyCluster, path, p.policyAuthority)
+		proxywasm.LogInfof("attempting to request policy to cluster[%s], path[%s], authority[%s]", p.policyCluster, path, p.policyAuthority)
 		proxywasm.DispatchHttpCall(
 			p.policyCluster, headers[:], []byte(reqBody), nil, 10000,
 			func(numHeaders, bodySize, numTrailers int) {
 				body, err := proxywasm.GetHttpCallResponseBody(0, bodySize)
 				if err != nil {
-					proxywasm.LogCriticalf("Failed to get policy body: %v", err)
+					proxywasm.LogCriticalf("failed to get policy body: %s", err)
 					return
 				}
 				var jws map[string]interface{}
 				if err := json.Unmarshal(body, &jws); err != nil {
-					proxywasm.LogCriticalf("Failed to parse JWS: %v", err)
+					proxywasm.LogCriticalf("failed to parse JWS: %s", err)
 					return
 				}
 				payloadB64, ok := jws["payload"].(string)
 				if !ok {
-					proxywasm.LogCritical("Policy missing payload")
+					proxywasm.LogCritical("payload missing in JWS policy")
 					return
 				}
 				payloadJSON, err := base64.RawURLEncoding.DecodeString(payloadB64)
 				if err != nil {
-					proxywasm.LogCriticalf("Failed to decode policy payload: %v", err)
+					proxywasm.LogCriticalf("failed to decode policy payload: %s", err)
 					return
 				}
 				var policyPayload JwsPolicyPayload
 				if err := json.Unmarshal(payloadJSON, &policyPayload); err != nil {
-					proxywasm.LogCriticalf("Failed to parse policy payload: %v", err)
+					proxywasm.LogCriticalf("failed to parse policy payload: %s", err)
 					return
 				}
 				p.policy = append(p.policy, &policyPayload)
 				p.lastUpdated = time.Now().UnixNano()
-				proxywasm.LogInfo("Policy loaded/refreshed successfully")
-				proxywasm.LogInfof("Policy:\n%#v\n", policyPayload)
+				proxywasm.LogInfo("policy loaded/refreshed successfully")
+				proxywasm.LogInfof("policy:\n%#v", policyPayload)
 			})
 	}
 }
@@ -402,7 +404,7 @@ func authorizePolicyAccess(audience, action, resource string, assertions []Asser
 		return false
 	}
 	for _, a := range assertions {
-		proxywasm.LogDebugf("checking assertion with request: assertion{effect[%s], action[%s], resource[%s]}, request{action[%s], resource[%s]}", a.Effect, a.Action, a.Resource, action, audience+":"+resource)
+		proxywasm.LogDebugf("checking assertion with request: request{action[%s], resource[%s]}, assertion{effect[%s], action[%s], resource[%s]}", action, audience+":"+resource, a.Effect, a.Action, a.Resource)
 		validator, err := NewAssertionValidator(a.Effect, a.Action, a.Resource)
 		if err != nil {
 			proxywasm.LogWarnf("assertion validator failed to initialize: effect[%s], action[%s], resource[%s]", a.Effect, a.Action, a.Resource)
