@@ -105,7 +105,7 @@ jobs:
       -
         name: Create git tag
         id: tag
-        if: ${{ env.CURRENT_TAG_VERSION != '' && env.TAG_VERSION != '' && env.TAG_VERSION != env.CURRENT_TAG_VERSION }}
+        if: ${{ env.TAG_VERSION != '' && env.TAG_VERSION != env.CURRENT_TAG_VERSION }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -116,7 +116,7 @@ jobs:
 
       - name: Trigger Workflows
         id: trigger
-        if: ${{ env.CURRENT_TAG_VERSION != '' && env.TAG_VERSION != '' && env.TAG_VERSION != env.CURRENT_TAG_VERSION }}
+        if: ${{ env.TAG_VERSION != '' && env.TAG_VERSION != env.CURRENT_TAG_VERSION }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
