@@ -23,14 +23,55 @@ static_resources:
                         - match: { prefix: "/" }
                           route: { cluster: echoserver }
                 http_filters:
-                  - name: envoy.filters.http.lua
+                  # Authentication with Athenz ZTS Access Token
+                  - name: envoy.filters.http.jwt_authentication.accesstoken.authentication
                     typed_config:
-                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
-                      inline_code: |
-                        function envoy_on_request(request_handle)
-                          request_handle:headers():add("x-athenz-action", request_handle:headers():get(":method"))
-                          request_handle:headers():add("x-athenz-resource", request_handle:headers():get(":path"))
-                        end
+                      # https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/jwt_authn_filter
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
+                      providers:
+                        zts_accesstoken:
+                          remote_jwks:
+                            http_uri:
+                              cluster: zts
+                              timeout: 5s
+                              uri: "https://athenz-zts-server.athenz:4443/zts/v1/oauth2/keys?rfc=true"
+                            cache_duration: { seconds: 600 }
+                          jwt_cache_config:
+                            jwt_cache_size: 100     # The unit is number of JWTs, default to 100.
+                            jwt_max_token_size: 4096 # The maximum size of a single cached token in bytes. If this field is not set or is set to 0, then the default value 4096 bytes is used. The maximum value for a token is inclusive.
+                          from_headers:
+                            - name: "Authorization"
+                              value_prefix: "Bearer "
+                            - name: "authorization"
+                              value_prefix: "bearer "
+                          forward: true
+                          claim_to_headers:
+                            - header_name: x-athenz-principal
+                              claim_name: sub
+                            - header_name: x-athenz-domain
+                              claim_name: aud
+                            - header_name: x-athenz-role
+                              claim_name: scope
+                            - header_name: x-athenz-issued-at
+                              claim_name: iat
+                            - header_name: x-athenz-expires-at
+                              claim_name: exp
+                            - header_name: x-athenz-jwt-sub
+                              claim_name: sub
+                            - header_name: x-athenz-jwt-aud
+                              claim_name: aud
+                            - header_name: x-athenz-jwt-scope
+                              claim_name: scope
+                            - header_name: x-athenz-jwt-iss
+                              claim_name: iss
+                            - header_name: x-athenz-jwt-iat
+                              claim_name: iat
+                            - header_name: x-athenz-jwt-exp
+                              claim_name: exp
+                      rules:
+                        - match: { prefix: "/" }
+                          requires:
+                            provider_name: zts_accesstoken
                   - name: envoy.filters.http.wasm
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
@@ -39,15 +80,15 @@ static_resources:
                           "@type": type.googleapis.com/google.protobuf.StringValue
                           value: |
                             {
-                              "cga": [
-                                { "athenz": { "domain": "athenz", "role": "envoy-clients" } }
-                              ],
+                              "cga": {
+                                "constraints": [ {"domain": "sys.auth", "role": "admin"}, {"domain": "athenz", "role": "envoy-clients"} ]
+                              },
                               "fga": {
                                 "cluster": "localhost",
                                 "path": "/zts/v1/domain/sys.auth/policy/signed",
                                 "authority": "athenz-zts-server.athenz",
-                                "actionheader": "x-athenz-action",
-                                "resourceheader": "x-athenz-resource",
+                                "actionheader": ":method",
+                                "resourceheader": ":path",
                                 "refresh": 30000
                               }
                             }
