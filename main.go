@@ -197,7 +197,6 @@ func (ctx *httpContext) OnHttpRequestHeaders(numHeaders int, endOfStream bool) t
 	if err != nil || !strings.HasPrefix(strings.ToLower(auth), "bearer ") {
 		proxywasm.LogWarnf("Missing or invalid authorization header")
 		proxywasm.SendHttpResponse(401, nil, []byte("Missing or invalid authorization header"), -1)
-		proxywasm.SetProperty([]string{"result"}, []byte("failure"))
 		return types.ActionPause
 	}
 	// Trim the first 7 characters and other spaces
@@ -254,7 +253,8 @@ func (ctx *httpContext) OnHttpRequestHeaders(numHeaders int, endOfStream bool) t
 			resource := strings.ToLower(resourceValue)
 			proxywasm.LogDebugf("Attempting to check request header: %s[%s], %s[%s]", ctx.plugin.actionHeader, action, ctx.plugin.resourceHeader, resource)
 			if !authorizePolicyAccess(aud, action, resource, assertions) {
-				proxywasm.SetProperty([]string{"result"}, []byte("unauthorized"))
+				proxywasm.LogWarnf("Forbidden: request denied by policy: action[%s], resource[%s], assertions[%#v]", action, resource, assertions)
+				proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: access denied by policy"), -1)
 				return types.ActionPause
 			}
 		}
