@@ -37,7 +37,7 @@ static_resources:
                               uri: "https://athenz-zts-server.athenz:4443/zts/v1/oauth2/keys?rfc=true"
                             cache_duration: { seconds: 600 }
                           jwt_cache_config:
-                            jwt_cache_size: 100     # The unit is number of JWTs, default to 100.
+                            jwt_cache_size: 100      # The unit is number of JWTs, default to 100.
                             jwt_max_token_size: 4096 # The maximum size of a single cached token in bytes. If this field is not set or is set to 0, then the default value 4096 bytes is used. The maximum value for a token is inclusive.
                           from_headers:
                             - name: "Authorization"
@@ -129,7 +129,7 @@ static_resources:
                   - name: envoy.filters.http.lua
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
-                      inline_code: |
+                      inline_code: | # max-age as seconds
                         function envoy_on_response(response_handle)
                           response_handle:headers():add("Cache-Control", "public, max-age=60")
                         end
