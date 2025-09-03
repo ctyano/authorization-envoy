@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -213,19 +214,20 @@ func (ctx *httpContext) OnHttpRequestHeaders(numHeaders int, endOfStream bool) t
 		return types.ActionPause
 	}
 
-	cgaresult := false
+	var cgaerr error
 	if ctx.plugin.coarseGrainedAuthorization {
-		cgaresult = checkCoarseGrainedAuthorization(ctx, aud, scopes)
+		cgaerr = checkCoarseGrainedAuthorization(ctx, aud, scopes)
 	}
 
-	fgaresult := false
+	var fgaerr error
 	if ctx.plugin.fineGrainedAuthorization {
-		fgaresult = checkFineGrainedAuthorization(ctx, aud, scopes)
+		fgaerr = checkFineGrainedAuthorization(ctx, aud, scopes)
 	}
 
-	if cgaresult || fgaresult {
-		return types.ActionContinue
+	if cgaerr != nil && fgaerr != nil {
+		proxywasm.SendHttpResponse(403, nil, []byte(fmt.Sprintf("Forbidden: coarse-grained authorization[%s], fine-grained authorization[%s]", cgaerr, fgaerr)), -1)
+		return types.ActionPause
 	}
 
-	return types.ActionPause
+	return types.ActionContinue
 }

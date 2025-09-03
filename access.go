@@ -111,7 +111,7 @@ func authorizePolicyAccess(audience, action, resource string, assertions []Asser
 	return false
 }
 
-func checkCoarseGrainedAuthorization(ctx *httpContext, aud string, scopes []string) bool {
+func checkCoarseGrainedAuthorization(ctx *httpContext, aud string, scopes []string) error {
 	matchedRole := ""
 constraintsCheck:
 	for _, c := range ctx.plugin.constraints {
@@ -126,14 +126,13 @@ constraintsCheck:
 	}
 	// Compare audience and scopes
 	if matchedRole == "" {
-		proxywasm.LogWarnf("forbidden: audience and scopes mismatch: audience[%s], scopes[%#v], expected[%#v]", aud, scopes, ctx.plugin.constraints)
-		proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: audience and scopes mismatch"), -1)
-		return false
+		proxywasm.LogWarnf("forbidden: audience and scopes mismatch: audience[%s], scopes[%#v], constraints[%#v]", aud, scopes, ctx.plugin.constraints)
+		return fmt.Errorf("audience and scopes mismatch")
 	}
-	return true
+	return nil
 }
 
-func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string) bool {
+func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string) error {
 	var matchedJws *JwsPolicyPayload
 	for _, jws := range ctx.plugin.policy {
 		// Compare audience
@@ -142,16 +141,14 @@ func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string
 		}
 	}
 	if matchedJws == nil {
-		proxywasm.LogWarnf("forbidden: audience domain not found in JWS payloads: audience[%s], matched JWS[%#v]", aud, matchedJws)
-		proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: audience mismatch"), -1)
-		return false
+		proxywasm.LogWarnf("forbidden: audience domain not found in jws payloads: audience[%s], matched jws[%#v]", aud, matchedJws)
+		return fmt.Errorf("audience mismatch")
 	}
 	// Compare scopes (scope and scp) with all roles in assertions
 	var assertions []Assertion
 	if assertions = getRoleAssertions(aud, scopes, matchedJws); assertions == nil {
 		proxywasm.LogWarnf("forbidden: scope(s) not allowed: aud[%s], scopes[%#v], expected[%#v]", aud, scopes, matchedJws)
-		proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: scope(s) not allowed"), -1)
-		return false
+		return fmt.Errorf("scope(s) not allowed")
 	}
 	actionValue, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.actionHeader)
 	resourceValue, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.resourceHeader)
@@ -160,8 +157,7 @@ func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string
 	proxywasm.LogDebugf("attempting to check request header: %s[%s], %s[%s]", ctx.plugin.actionHeader, action, ctx.plugin.resourceHeader, resource)
 	if !authorizePolicyAccess(aud, action, resource, assertions) {
 		proxywasm.LogWarnf("forbidden: request denied by policy: action[%s], resource[%s], assertions[%#v]", action, resource, assertions)
-		proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: access denied by policy"), -1)
-		return false
+		return fmt.Errorf("access denied by policy")
 	}
-	return true
+	return nil
 }
