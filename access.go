@@ -110,3 +110,58 @@ func authorizePolicyAccess(audience, action, resource string, assertions []Asser
 	}
 	return false
 }
+
+func checkCoarseGrainedAuthorization(ctx *httpContext, aud string, scopes []string) bool {
+	matchedRole := ""
+constraintsCheck:
+	for _, c := range ctx.plugin.constraints {
+		if c.Domain == aud {
+			for _, scope := range scopes {
+				if c.Role == scope {
+					matchedRole = aud + ":role." + scope
+					break constraintsCheck
+				}
+			}
+		}
+	}
+	// Compare audience and scopes
+	if matchedRole == "" {
+		proxywasm.LogWarnf("forbidden: audience and scopes mismatch: audience[%s], scopes[%#v], expected[%#v]", aud, scopes, ctx.plugin.constraints)
+		proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: audience and scopes mismatch"), -1)
+		return false
+	}
+	return true
+}
+
+func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string) bool {
+	var matchedJws *JwsPolicyPayload
+	for _, jws := range ctx.plugin.policy {
+		// Compare audience
+		if strings.EqualFold(aud, jws.PolicyData.Domain) {
+			matchedJws = jws
+		}
+	}
+	if matchedJws == nil {
+		proxywasm.LogWarnf("forbidden: audience domain not found in JWS payloads: audience[%s], matched JWS[%#v]", aud, matchedJws)
+		proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: audience mismatch"), -1)
+		return false
+	}
+	// Compare scopes (scope and scp) with all roles in assertions
+	var assertions []Assertion
+	if assertions = getRoleAssertions(aud, scopes, matchedJws); assertions == nil {
+		proxywasm.LogWarnf("forbidden: scope(s) not allowed: aud[%s], scopes[%#v], expected[%#v]", aud, scopes, matchedJws)
+		proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: scope(s) not allowed"), -1)
+		return false
+	}
+	actionValue, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.actionHeader)
+	resourceValue, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.resourceHeader)
+	action := strings.ToLower(actionValue)
+	resource := strings.ToLower(resourceValue)
+	proxywasm.LogDebugf("attempting to check request header: %s[%s], %s[%s]", ctx.plugin.actionHeader, action, ctx.plugin.resourceHeader, resource)
+	if !authorizePolicyAccess(aud, action, resource, assertions) {
+		proxywasm.LogWarnf("forbidden: request denied by policy: action[%s], resource[%s], assertions[%#v]", action, resource, assertions)
+		proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: access denied by policy"), -1)
+		return false
+	}
+	return true
+}

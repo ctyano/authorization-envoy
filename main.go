@@ -102,12 +102,13 @@ func (p *pluginContext) OnTick() {
 // Note that this parses the json string by gjson, since TinyGo doesn't support encoding/json.
 // You can also try https://github.com/mailru/easyjson, which supports decoding to a struct.
 // configuration:
-//   "@type": type.googleapis.com/google.protobuf.StringValue
-//   value: |
-//     {
-//       "user_prefix": "<prefix to prepend to the jwt claim to compare with csr subject cn as an athenz user name. e.g. user.>",
-//       "claim": "<jwt claim name to extract athenz user name>"
-//     }
+//
+//	"@type": type.googleapis.com/google.protobuf.StringValue
+//	value: |
+//	  {
+//	    "user_prefix": "<prefix to prepend to the jwt claim to compare with csr subject cn as an athenz user name. e.g. user.>",
+//	    "claim": "<jwt claim name to extract athenz user name>"
+//	  }
 func (p *pluginContext) OnPluginStart(pluginConfigurationSize int) types.OnPluginStartStatus {
 	proxywasm.LogDebug("Loading plugin config")
 	rawConfig, err := proxywasm.GetPluginConfiguration()
@@ -212,54 +213,19 @@ func (ctx *httpContext) OnHttpRequestHeaders(numHeaders int, endOfStream bool) t
 		return types.ActionPause
 	}
 
+	cgaresult := false
 	if ctx.plugin.coarseGrainedAuthorization {
-		matchedRole := ""
-	constraintsCheck:
-		for _, c := range ctx.plugin.constraints {
-			if c.Domain == aud {
-				for _, scope := range scopes {
-					if c.Role == scope {
-						matchedRole = aud + ":role." + scope
-						break constraintsCheck
-					}
-				}
-			}
-		}
-		// Compare audience and scopes
-		if matchedRole == "" {
-			proxywasm.LogWarnf("forbidden: audience and scopes mismatch: audience[%s], scopes[%#v], expected[%#v]", aud, scopes, ctx.plugin.constraints)
-			proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: audience and scopes mismatch"), -1)
-			return types.ActionPause
-		}
+		cgaresult = checkCoarseGrainedAuthorization(ctx, aud, scopes)
 	}
 
+	fgaresult := false
 	if ctx.plugin.fineGrainedAuthorization {
-		for _, policy := range ctx.plugin.policy {
-			// Compare audience
-			if !strings.EqualFold(aud, policy.PolicyData.Domain) {
-				proxywasm.LogWarnf("forbidden: audience mismatch: request[%s], expected[%s]", aud, policy.PolicyData.Domain)
-				proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: audience mismatch"), -1)
-				return types.ActionPause
-			}
-			// Compare scopes (scope and scp) with all roles in assertions
-			var assertions []Assertion
-			if assertions = getRoleAssertions(aud, scopes, policy); assertions == nil {
-				proxywasm.LogWarnf("forbidden: scope(s) not allowed: request[%#v], expected[%#v]", scopes, policy)
-				proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: scope(s) not allowed"), -1)
-				return types.ActionPause
-			}
-			actionValue, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.actionHeader)
-			resourceValue, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.resourceHeader)
-			action := strings.ToLower(actionValue)
-			resource := strings.ToLower(resourceValue)
-			proxywasm.LogDebugf("attempting to check request header: %s[%s], %s[%s]", ctx.plugin.actionHeader, action, ctx.plugin.resourceHeader, resource)
-			if !authorizePolicyAccess(aud, action, resource, assertions) {
-				proxywasm.LogWarnf("forbidden: request denied by policy: action[%s], resource[%s], assertions[%#v]", action, resource, assertions)
-				proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: access denied by policy"), -1)
-				return types.ActionPause
-			}
-		}
+		fgaresult = checkFineGrainedAuthorization(ctx, aud, scopes)
 	}
 
-	return types.ActionContinue
+	if cgaresult || fgaresult {
+		return types.ActionContinue
+	}
+
+	return types.ActionPause
 }
