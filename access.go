@@ -79,7 +79,7 @@ func getRoleAssertions(audience string, scopes []string, jws *JwsPolicyPayload) 
 		role := audience + ":role." + scope
 		if _, found := roleSet[role]; found {
 			roleAssertions := roleSet[role]
-proxywasm.LogDebugf("assertion found for role[%s]: assertions[%#v]", role, roleAssertions)
+			proxywasm.LogDebugf("assertion found for role[%s]: assertions[%#v]", role, roleAssertions)
 			assertions = append(assertions, roleAssertions...)
 		}
 	}
@@ -108,7 +108,7 @@ func authorizePolicyAccess(audience, action, resource string, assertions []Asser
 				// immediately return false if any deny policy was matched
 				return false
 			}
-// return true only if there is no deny policy matched and an allow policy is matched
+			// return true only if there is no deny policy matched and an allow policy is matched
 			result = true
 		}
 	}
@@ -132,7 +132,7 @@ func checkCoarseGrainedAuthorization(ctx *httpContext, aud string, scopes []stri
 	}
 
 	// Compare audience and scopes
-proxywasm.LogWarnf("forbidden: audience and scopes mismatch: audience[%s], scopes[%q], constraints[%#v]", aud, scopes, ctx.plugin.constraints)
+	proxywasm.LogWarnf("forbidden: audience and scopes mismatch: audience[%s], scopes[%q], constraints[%#v]", aud, scopes, ctx.plugin.constraints)
 	return fmt.Errorf("audience and scopes mismatch")
 }
 

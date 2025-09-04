@@ -143,7 +143,7 @@ func (p *pluginContext) OnPluginStart(pluginConfigurationSize int) types.OnPlugi
 			p.constraints = append(p.constraints, c)
 			return true
 		})
-proxywasm.LogInfof("coarse-grained authorization configuration: %#v\n", p.constraints)
+		proxywasm.LogInfof("coarse-grained authorization configuration: %#v\n", p.constraints)
 		p.coarseGrainedAuthorization = true
 	}
 
