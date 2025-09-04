@@ -234,21 +234,20 @@ func (ctx *httpContext) OnHttpRequestHeaders(numHeaders int, endOfStream bool) t
 	var forbidden bool
 	var logMessage string
 
-	if cgaEnabled && fgaEnabled {
-		if cgaerr != nil && fgaerr != nil {
-			forbidden = true
-			logMessage = fmt.Sprintf("Forbidden: coarse-grained authorization[%s], fine-grained authorization[%s]", cgaerr, fgaerr)
+	// The request is forbidden if all enabled authorization methods fail.
+	// If both CGA and FGA are enabled, this means access is granted if at least one succeeds (OR logic).
+	cgaAuthFailed := !cgaEnabled || cgaerr != nil
+	fgaAuthFailed := !fgaEnabled || fgaerr != nil
+	if cgaAuthFailed && fgaAuthFailed {
+		forbidden = true
+		var errs []string
+		if cgaEnabled { // cgaerr is non-nil here
+			errs = append(errs, fmt.Sprintf("coarse-grained authorization[%s]", cgaerr))
 		}
-	} else if cgaEnabled {
-		if cgaerr != nil {
-			forbidden = true
-			logMessage = fmt.Sprintf("Forbidden: coarse-grained authorization[%s]", cgaerr)
+		if fgaEnabled { // fgaerr is non-nil here
+			errs = append(errs, fmt.Sprintf("fine-grained authorization[%s]", fgaerr))
 		}
-	} else if fgaEnabled {
-		if fgaerr != nil {
-			forbidden = true
-			logMessage = fmt.Sprintf("Forbidden: fine-grained authorization[%s]", fgaerr)
-		}
+		logMessage = "Forbidden: " + strings.Join(errs, ", ")
 	}
 
 	if forbidden {
