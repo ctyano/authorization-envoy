@@ -139,6 +139,7 @@ func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string
 		// Compare audience
 		if strings.EqualFold(aud, jws.PolicyData.Domain) {
 			matchedJws = jws
+			break
 		}
 	}
 	if matchedJws == nil {
