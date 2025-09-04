@@ -151,13 +151,13 @@ func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string
 		proxywasm.LogWarnf("forbidden: scope(s) not allowed: aud[%s], scopes[%#v], expected[%#v]", aud, scopes, matchedJws)
 		return fmt.Errorf("scope(s) not allowed")
 	}
-	actionValue, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.actionHeader)
-	if actionValue == "" {
+	actionValue, err := proxywasm.GetHttpRequestHeader(ctx.plugin.actionHeader)
+	if err != nil || actionValue == "" {
 		proxywasm.LogWarnf("action header '%s' is missing or empty", ctx.plugin.actionHeader)
 		return fmt.Errorf("missing or empty action header")
 	}
-	resourceValue, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.resourceHeader)
-	if resourceValue == "" {
+	resourceValue, err := proxywasm.GetHttpRequestHeader(ctx.plugin.resourceHeader)
+	if err != nil || resourceValue == "" {
 		proxywasm.LogWarnf("resource header '%s' is missing or empty", ctx.plugin.resourceHeader)
 		return fmt.Errorf("missing or empty resource header")
 	}
