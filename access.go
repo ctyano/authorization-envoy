@@ -129,6 +129,7 @@ constraintsCheck:
 		proxywasm.LogWarnf("forbidden: audience and scopes mismatch: audience[%s], scopes[%#v], constraints[%#v]", aud, scopes, ctx.plugin.constraints)
 		return fmt.Errorf("audience and scopes mismatch")
 	}
+	proxywasm.LogDebugf("coarse-grained authorization success: aud[%s], scope[%s]", aud, matchedRole)
 	return nil
 }
 
@@ -167,5 +168,6 @@ func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string
 		proxywasm.LogWarnf("forbidden: request denied by policy: action[%s], resource[%s], assertions[%#v]", action, resource, assertions)
 		return fmt.Errorf("access denied by policy")
 	}
+	proxywasm.LogDebugf("fine-grained authorization success: aud[%s], scopes[%#v], action[%s], resource[%s]", aud, scopes, action, resource)
 	return nil
 }
