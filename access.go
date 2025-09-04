@@ -112,25 +112,24 @@ func authorizePolicyAccess(audience, action, resource string, assertions []Asser
 }
 
 func checkCoarseGrainedAuthorization(ctx *httpContext, aud string, scopes []string) error {
-	matchedRole := ""
-constraintsCheck:
+	scopeSet := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		scopeSet[scope] = struct{}{}
+	}
+
 	for _, c := range ctx.plugin.constraints {
 		if c.Domain == aud {
-			for _, scope := range scopes {
-				if c.Role == scope {
-					matchedRole = aud + ":role." + scope
-					break constraintsCheck
-				}
+			if _, ok := scopeSet[c.Role]; ok {
+				matchedRole := aud + ":role." + c.Role
+				proxywasm.LogDebugf("coarse-grained authorization success: aud[%s], scope[%s]", aud, matchedRole)
+				return nil
 			}
 		}
 	}
+
 	// Compare audience and scopes
-	if matchedRole == "" {
-		proxywasm.LogWarnf("forbidden: audience and scopes mismatch: audience[%s], scopes[%#v], constraints[%#v]", aud, scopes, ctx.plugin.constraints)
-		return fmt.Errorf("audience and scopes mismatch")
-	}
-	proxywasm.LogDebugf("coarse-grained authorization success: aud[%s], scope[%s]", aud, matchedRole)
-	return nil
+	proxywasm.LogWarnf("forbidden: audience and scopes mismatch: audience[%s], scopes[%#v], constraints[%#v]", aud, scopes, ctx.plugin.constraints)
+	return fmt.Errorf("audience and scopes mismatch")
 }
 
 func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string) error {
