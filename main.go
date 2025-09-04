@@ -231,24 +231,30 @@ func (ctx *httpContext) OnHttpRequestHeaders(numHeaders int, endOfStream bool) t
 		fgaerr = checkFineGrainedAuthorization(ctx, aud, scopes)
 	}
 
+	var forbidden bool
+	var logMessage string
+
 	if cgaEnabled && fgaEnabled {
 		if cgaerr != nil && fgaerr != nil {
-			proxywasm.LogWarnf("Forbidden: coarse-grained authorization[%s], fine-grained authorization[%s]", cgaerr, fgaerr)
-			proxywasm.SendHttpResponse(403, nil, []byte("Forbidden"), -1)
-			return types.ActionPause
+			forbidden = true
+			logMessage = fmt.Sprintf("Forbidden: coarse-grained authorization[%s], fine-grained authorization[%s]", cgaerr, fgaerr)
 		}
 	} else if cgaEnabled {
 		if cgaerr != nil {
-			proxywasm.LogWarnf("Forbidden: coarse-grained authorization[%s]", cgaerr)
-			proxywasm.SendHttpResponse(403, nil, []byte("Forbidden"), -1)
-			return types.ActionPause
+			forbidden = true
+			logMessage = fmt.Sprintf("Forbidden: coarse-grained authorization[%s]", cgaerr)
 		}
 	} else if fgaEnabled {
 		if fgaerr != nil {
-			proxywasm.LogWarnf("Forbidden: fine-grained authorization[%s]", fgaerr)
-			proxywasm.SendHttpResponse(403, nil, []byte("Forbidden"), -1)
-			return types.ActionPause
+			forbidden = true
+			logMessage = fmt.Sprintf("Forbidden: fine-grained authorization[%s]", fgaerr)
 		}
+	}
+
+	if forbidden {
+		proxywasm.LogWarn(logMessage)
+		proxywasm.SendHttpResponse(403, nil, []byte("Forbidden"), -1)
+		return types.ActionPause
 	}
 
 	return types.ActionContinue
