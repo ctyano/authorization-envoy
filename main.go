@@ -214,27 +214,38 @@ func (ctx *httpContext) OnHttpRequestHeaders(numHeaders int, endOfStream bool) t
 		return types.ActionPause
 	}
 
+	cgaEnabled := ctx.plugin.coarseGrainedAuthorization
+	fgaEnabled := ctx.plugin.fineGrainedAuthorization
+
+	if !cgaEnabled && !fgaEnabled {
+		proxywasm.SendHttpResponse(503, nil, []byte("Service Unavailable: coarse-grained authorization and fine-grained authorization are both disabled."), -1)
+		return types.ActionPause
+	}
+
 	var cgaerr, fgaerr error
-	if ctx.plugin.coarseGrainedAuthorization && ctx.plugin.fineGrainedAuthorization {
+
+	if cgaEnabled {
+		cgaerr = checkCoarseGrainedAuthorization(ctx, aud, scopes)
+	}
+	if fgaEnabled {
+		fgaerr = checkFineGrainedAuthorization(ctx, aud, scopes)
+	}
+
+	if cgaEnabled && fgaEnabled {
 		if cgaerr != nil && fgaerr != nil {
 			proxywasm.SendHttpResponse(403, nil, []byte(fmt.Sprintf("Forbidden: coarse-grained authorization[%s], fine-grained authorization[%s]", cgaerr, fgaerr)), -1)
 			return types.ActionPause
 		}
-	} else if ctx.plugin.coarseGrainedAuthorization {
-		cgaerr = checkCoarseGrainedAuthorization(ctx, aud, scopes)
+	} else if cgaEnabled {
 		if cgaerr != nil {
 			proxywasm.SendHttpResponse(403, nil, []byte(fmt.Sprintf("Forbidden: coarse-grained authorization[%s]", cgaerr)), -1)
 			return types.ActionPause
 		}
-	} else if ctx.plugin.fineGrainedAuthorization {
-		fgaerr = checkFineGrainedAuthorization(ctx, aud, scopes)
+	} else if fgaEnabled {
 		if fgaerr != nil {
 			proxywasm.SendHttpResponse(403, nil, []byte(fmt.Sprintf("Forbidden: fine-grained authorization[%s]", fgaerr)), -1)
 			return types.ActionPause
 		}
-	} else {
-		proxywasm.SendHttpResponse(503, nil, []byte("Service Unavailable: coarse-grained authorization and fine-grained authorization are both disabled."), -1)
-		return types.ActionPause
 	}
 
 	return types.ActionContinue
