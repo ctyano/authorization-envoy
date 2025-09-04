@@ -68,19 +68,19 @@ func getRoleAssertions(audience string, scopes []string, jws *JwsPolicyPayload) 
 	if len(scopes) == 0 {
 		return nil
 	}
-	roleSet := make(map[string]Assertion)
+	roleSet := make(map[string][]Assertion)
 	for _, policy := range jws.PolicyData.Policies {
 		for _, assertion := range policy.Assertions {
-			roleSet[assertion.Role] = assertion
+			roleSet[assertion.Role] = append(roleSet[assertion.Role], assertion)
 		}
 	}
 	var assertions []Assertion
 	for _, scope := range scopes {
 		role := audience + ":role." + scope
 		if _, found := roleSet[role]; found {
-			assertion := roleSet[role]
-			proxywasm.LogDebugf("assertion found for role: request[%s], assertion[%#v]", role, assertion)
-			assertions = append(assertions, assertion)
+			roleAssertions := roleSet[role]
+			proxywasm.LogDebugf("assertion found for role[%s]: assertions[%#v]", role, roleAssertions)
+			assertions = append(assertions, roleAssertions...)
 		}
 	}
 	return assertions
@@ -91,6 +91,7 @@ func authorizePolicyAccess(audience, action, resource string, assertions []Asser
 	if len(assertions) == 0 {
 		return false
 	}
+	result := false
 	for _, a := range assertions {
 		proxywasm.LogDebugf("checking assertion with request: request{action[%s], resource[%s]}, assertion{effect[%s], action[%s], resource[%s]}", action, audience+":"+resource, a.Effect, a.Action, a.Resource)
 		validator, err := NewAssertionValidator(a.Effect, a.Action, a.Resource)
@@ -103,12 +104,15 @@ func authorizePolicyAccess(audience, action, resource string, assertions []Asser
 			validator.ActionRegexp.MatchString(strings.ToLower(action)) &&
 			validator.ResourceRegexp.MatchString(strings.ToLower(resource)) {
 			proxywasm.LogDebugf("assertion matched with request: action[%s], resource[%s], effect[%v]", action, resource, (validator.Effect == nil))
-			if validator.Effect == nil {
-				return true
+			if validator.Effect != nil {
+				// immediately return false if any deny policy was matched
+				return false
 			}
+			// return true only if their is no deny policy matched and their is only allow policy matched
+			result = true
 		}
 	}
-	return false
+	return result
 }
 
 func checkCoarseGrainedAuthorization(ctx *httpContext, aud string, scopes []string) error {
