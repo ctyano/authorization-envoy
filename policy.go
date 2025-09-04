@@ -11,6 +11,7 @@ import (
 
 // Fetch the JWS policy via POST, as required.
 func (p *pluginContext) fetchPolicy() {
+	p.policy = make(map[string]*JwsPolicyPayload)
 	for _, domain := range p.policyDomains {
 		path := ReplacePlaceholders(p.policyPath, map[string]string{"domain": domain})
 		headers := [][2]string{
@@ -50,7 +51,7 @@ func (p *pluginContext) fetchPolicy() {
 					proxywasm.LogCriticalf("failed to parse policy payload: %s", err)
 					return
 				}
-				p.policy = append(p.policy, &policyPayload)
+				p.policy[domain] = &policyPayload
 				p.lastUpdated = time.Now().UnixNano()
 				proxywasm.LogInfo("policy loaded/refreshed successfully")
 				proxywasm.LogInfof("policy:\n%#v", policyPayload)

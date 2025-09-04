@@ -133,14 +133,7 @@ func checkCoarseGrainedAuthorization(ctx *httpContext, aud string, scopes []stri
 }
 
 func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string) error {
-	var matchedJws *JwsPolicyPayload
-	for _, jws := range ctx.plugin.policy {
-		// Compare audience
-		if strings.EqualFold(aud, jws.PolicyData.Domain) {
-			matchedJws = jws
-			break
-		}
-	}
+	matchedJws := ctx.plugin.policy[aud]
 	if matchedJws == nil {
 		proxywasm.LogWarnf("forbidden: audience domain not found in jws payloads: audience[%s], matched jws[%#v]", aud, matchedJws)
 		return fmt.Errorf("audience mismatch")

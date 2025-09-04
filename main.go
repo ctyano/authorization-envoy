@@ -53,7 +53,7 @@ type pluginContext struct {
 	constraints                []Constraint
 
 	fineGrainedAuthorization bool
-	policy                   []*JwsPolicyPayload
+	policy                   map[string]*JwsPolicyPayload
 	lastUpdated              int64 // UnixNano (optional)
 	policyCluster            string
 	policyPath               string
