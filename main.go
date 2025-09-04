@@ -143,7 +143,7 @@ func (p *pluginContext) OnPluginStart(pluginConfigurationSize int) types.OnPlugi
 			p.constraints = append(p.constraints, c)
 			return true
 		})
-		proxywasm.LogInfof("coarse-grained authorization configuration: %#v\n", p.constraints)
+		proxywasm.LogInfof("coarse-grained authorization configuration: %q\n", p.constraints)
 		p.coarseGrainedAuthorization = true
 	}
 
@@ -173,7 +173,7 @@ func (p *pluginContext) OnPluginStart(pluginConfigurationSize int) types.OnPlugi
 		p.actionHeader = strings.TrimSpace(fga.Get("actionheader").String())
 		p.resourceHeader = strings.TrimSpace(fga.Get("resourceheader").String())
 		p.policyRefresh = uint32(fga.Get("refresh").Int())
-		proxywasm.LogInfof("fine-grained authorization configuration: cluster=%s, path=%s, domains=[%#v], authority=%s, refresh=%d", p.policyCluster, p.policyPath, p.policyDomains, p.policyAuthority, p.policyRefresh)
+		proxywasm.LogInfof("fine-grained authorization configuration: cluster=%s, path=%s, domains=[%q], authority=%s, refresh=%d", p.policyCluster, p.policyPath, p.policyDomains, p.policyAuthority, p.policyRefresh)
 
 		if err := proxywasm.SetTickPeriodMilliSeconds(p.policyRefresh); err != nil {
 			proxywasm.LogCriticalf("failed to set tick period: %v", err)
