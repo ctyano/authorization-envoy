@@ -79,7 +79,7 @@ func getRoleAssertions(audience string, scopes []string, jws *JwsPolicyPayload) 
 		role := audience + ":role." + scope
 		if _, found := roleSet[role]; found {
 			roleAssertions := roleSet[role]
-			proxywasm.LogDebugf("assertion found for role[%s]: assertions[%q]", role, roleAssertions)
+proxywasm.LogDebugf("assertion found for role[%s]: assertions[%#v]", role, roleAssertions)
 			assertions = append(assertions, roleAssertions...)
 		}
 	}
@@ -132,7 +132,7 @@ func checkCoarseGrainedAuthorization(ctx *httpContext, aud string, scopes []stri
 	}
 
 	// Compare audience and scopes
-	proxywasm.LogWarnf("forbidden: audience and scopes mismatch: audience[%s], scopes[%q], constraints[%q]", aud, scopes, ctx.plugin.constraints)
+proxywasm.LogWarnf("forbidden: audience and scopes mismatch: audience[%s], scopes[%q], constraints[%#v]", aud, scopes, ctx.plugin.constraints)
 	return fmt.Errorf("audience and scopes mismatch")
 }
 
@@ -160,7 +160,7 @@ func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string
 	resource := strings.ToLower(resourceValue)
 	proxywasm.LogDebugf("attempting to check request header: %s[%s], %s[%s]", ctx.plugin.actionHeader, action, ctx.plugin.resourceHeader, resource)
 	if !authorizePolicyAccess(aud, action, resource, assertions) {
-		proxywasm.LogWarnf("forbidden: request denied by policy: action[%s], resource[%s], assertions[%q]", action, resource, assertions)
+proxywasm.LogWarnf("forbidden: request denied by policy: action[%s], resource[%s], assertions[%#v]", action, resource, assertions)
 		return fmt.Errorf("access denied by policy")
 	}
 	proxywasm.LogDebugf("fine-grained authorization success: aud[%s], scopes[%q], action[%s], resource[%s]", aud, scopes, action, resource)
