@@ -11,7 +11,7 @@ endif
 ifeq ($(ENVOY_VERSION),)
 ENVOY_VERSION := $(shell curl -s https://api.github.com/repos/envoyproxy/envoy/releases | jq -r .[].tag_name | sort -rV | head -n1)
 ifeq ($(ENVOY_VERSION),)
-ENVOY_VERSION := v0.0.0
+$(error Failed to determine ENVOY_VERSION from GitHub API. Please set it manually.)
 endif
 endif
 
