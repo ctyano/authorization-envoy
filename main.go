@@ -251,7 +251,6 @@ func (ctx *httpContext) OnHttpRequestHeaders(numHeaders int, endOfStream bool) t
 	}
 
 	if forbidden {
-		proxywasm.LogWarn(logMessage)
 		proxywasm.SendHttpResponse(403, nil, []byte("Forbidden"), -1)
 		return types.ActionPause
 	}
