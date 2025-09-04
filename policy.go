@@ -54,7 +54,7 @@ func (p *pluginContext) fetchPolicy() {
 				p.policy[domain] = &policyPayload
 				p.lastUpdated = time.Now().UnixNano()
 				proxywasm.LogInfo("policy loaded/refreshed successfully")
-    proxywasm.LogDebugf("%#v", *p.policy[domain])
+		proxywasm.LogDebugf("%#v", *p.policy[domain])
 			})
 	}
 }
