@@ -241,10 +241,10 @@ func (ctx *httpContext) OnHttpRequestHeaders(numHeaders int, endOfStream bool) t
 	if cgaAuthFailed && fgaAuthFailed {
 		forbidden = true
 		var errs []string
-		if cgaEnabled { // cgaerr is non-nil here
+		if cgaerr != nil {
 			errs = append(errs, fmt.Sprintf("coarse-grained authorization[%s]", cgaerr))
 		}
-		if fgaEnabled { // fgaerr is non-nil here
+		if fgaerr != nil {
 			errs = append(errs, fmt.Sprintf("fine-grained authorization[%s]", fgaerr))
 		}
 		logMessage = "Forbidden: " + strings.Join(errs, ", ")
