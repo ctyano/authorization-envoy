@@ -166,8 +166,7 @@ func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string
 func getRequiredHeader(headerName string) (string, error) {
 	value, err := proxywasm.GetHttpRequestHeader(headerName)
 	if err != nil || value == "" {
-		proxywasm.LogWarnf("missing or empty header: %s", headerName)
-		return "", fmt.Errorf("missing or empty header: %s", headerName)
+		return "", logWarnAndErrorf("missing or empty header: %s", headerName)
 	}
 	return value, nil
 }
