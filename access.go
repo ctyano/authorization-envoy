@@ -133,20 +133,20 @@ func checkCoarseGrainedAuthorization(ctx *httpContext, aud string, scopes []stri
 
 	// Compare audience and scopes
 	proxywasm.LogWarnf("forbidden: audience and scopes mismatch: audience[%s], scopes[%q], constraints[%#v]", aud, scopes, ctx.plugin.constraints)
-	return fmt.Errorf("audience and scopes mismatch")
+	return fmt.Errorf("forbidden: audience and scopes mismatch: audience[%s], scopes[%q], constraints[%#v]", aud, scopes, ctx.plugin.constraints)
 }
 
 func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string) error {
 	matchedJws := ctx.plugin.policy[aud]
 	if matchedJws == nil {
 		proxywasm.LogWarnf("forbidden: audience domain[%s] not found in jws payload", aud)
-		return fmt.Errorf("audience mismatch")
+		return fmt.Errorf("forbidden: audience domain[%s] not found in jws payload", aud)
 	}
 	// Compare scopes (scope and scp) with all roles in assertions
 	var assertions []Assertion
 	if assertions = getRoleAssertions(aud, scopes, matchedJws); len(assertions) == 0 {
 		proxywasm.LogWarnf("forbidden: scope(s) not allowed: aud[%s], scopes[%q]", aud, scopes)
-		return fmt.Errorf("scope(s) not allowed")
+		return fmt.Errorf("forbidden: scope(s) not allowed: aud[%s], scopes[%q]", aud, scopes)
 	}
 	actionValue, err := getRequiredHeader(ctx.plugin.actionHeader)
 	if err != nil {
@@ -161,7 +161,7 @@ func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string
 	proxywasm.LogDebugf("attempting to check request header: %s[%s], %s[%s]", ctx.plugin.actionHeader, action, ctx.plugin.resourceHeader, resource)
 	if !authorizePolicyAccess(aud, action, resource, assertions) {
 		proxywasm.LogWarnf("forbidden: request denied by policy: action[%s], resource[%s], assertions[%#v]", action, resource, assertions)
-		return fmt.Errorf("access denied by policy")
+		return fmt.Errorf("forbidden: request denied by policy: action[%s], resource[%s], assertions[%#v]", action, resource, assertions)
 	}
 	proxywasm.LogDebugf("fine-grained authorization success: aud[%s], scopes[%q], action[%s], resource[%s]", aud, scopes, action, resource)
 	return nil
@@ -170,7 +170,7 @@ func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string
 func getRequiredHeader(headerName string) (string, error) {
 	value, err := proxywasm.GetHttpRequestHeader(headerName)
 	if err != nil || value == "" {
-		proxywasm.LogWarnf("header '%s' is missing or empty", headerName)
+		proxywasm.LogWarnf("missing or empty header: %s", headerName)
 		return "", fmt.Errorf("missing or empty header: %s", headerName)
 	}
 	return value, nil
