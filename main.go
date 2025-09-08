@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -52,7 +53,7 @@ type pluginContext struct {
 	constraints                []Constraint
 
 	fineGrainedAuthorization bool
-	policy                   []*JwsPolicyPayload
+	policy                   map[string]*JwsPolicyPayload
 	lastUpdated              int64 // UnixNano (optional)
 	policyCluster            string
 	policyPath               string
@@ -102,12 +103,13 @@ func (p *pluginContext) OnTick() {
 // Note that this parses the json string by gjson, since TinyGo doesn't support encoding/json.
 // You can also try https://github.com/mailru/easyjson, which supports decoding to a struct.
 // configuration:
-//   "@type": type.googleapis.com/google.protobuf.StringValue
-//   value: |
-//     {
-//       "user_prefix": "<prefix to prepend to the jwt claim to compare with csr subject cn as an athenz user name. e.g. user.>",
-//       "claim": "<jwt claim name to extract athenz user name>"
-//     }
+//
+//	"@type": type.googleapis.com/google.protobuf.StringValue
+//	value: |
+//	  {
+//	    "user_prefix": "<prefix to prepend to the jwt claim to compare with csr subject cn as an athenz user name. e.g. user.>",
+//	    "claim": "<jwt claim name to extract athenz user name>"
+//	  }
 func (p *pluginContext) OnPluginStart(pluginConfigurationSize int) types.OnPluginStartStatus {
 	proxywasm.LogDebug("Loading plugin config")
 	rawConfig, err := proxywasm.GetPluginConfiguration()
@@ -171,7 +173,7 @@ func (p *pluginContext) OnPluginStart(pluginConfigurationSize int) types.OnPlugi
 		p.actionHeader = strings.TrimSpace(fga.Get("actionheader").String())
 		p.resourceHeader = strings.TrimSpace(fga.Get("resourceheader").String())
 		p.policyRefresh = uint32(fga.Get("refresh").Int())
-		proxywasm.LogInfof("fine-grained authorization configuration: cluster=%s, path=%s, domains=[%#v], authority=%s, refresh=%d", p.policyCluster, p.policyPath, p.policyDomains, p.policyAuthority, p.policyRefresh)
+		proxywasm.LogInfof("fine-grained authorization configuration: cluster=%s, path=%s, domains=[%q], authority=%s, refresh=%d", p.policyCluster, p.policyPath, p.policyDomains, p.policyAuthority, p.policyRefresh)
 
 		if err := proxywasm.SetTickPeriodMilliSeconds(p.policyRefresh); err != nil {
 			proxywasm.LogCriticalf("failed to set tick period: %v", err)
@@ -212,53 +214,46 @@ func (ctx *httpContext) OnHttpRequestHeaders(numHeaders int, endOfStream bool) t
 		return types.ActionPause
 	}
 
-	if ctx.plugin.coarseGrainedAuthorization {
-		matchedRole := ""
-	constraintsCheck:
-		for _, c := range ctx.plugin.constraints {
-			if c.Domain == aud {
-				for _, scope := range scopes {
-					if c.Role == scope {
-						matchedRole = aud + ":role." + scope
-						break constraintsCheck
-					}
-				}
-			}
-		}
-		// Compare audience and scopes
-		if matchedRole == "" {
-			proxywasm.LogWarnf("forbidden: audience and scopes mismatch: audience[%s], scopes[%#v], expected[%#v]", aud, scopes, ctx.plugin.constraints)
-			proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: audience and scopes mismatch"), -1)
-			return types.ActionPause
-		}
+	cgaEnabled := ctx.plugin.coarseGrainedAuthorization
+	fgaEnabled := ctx.plugin.fineGrainedAuthorization
+
+	if !cgaEnabled && !fgaEnabled {
+		proxywasm.SendHttpResponse(503, nil, []byte("Service Unavailable: coarse-grained authorization and fine-grained authorization are both disabled."), -1)
+		return types.ActionPause
 	}
 
-	if ctx.plugin.fineGrainedAuthorization {
-		for _, policy := range ctx.plugin.policy {
-			// Compare audience
-			if !strings.EqualFold(aud, policy.PolicyData.Domain) {
-				proxywasm.LogWarnf("forbidden: audience mismatch: request[%s], expected[%s]", aud, policy.PolicyData.Domain)
-				proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: audience mismatch"), -1)
-				return types.ActionPause
-			}
-			// Compare scopes (scope and scp) with all roles in assertions
-			var assertions []Assertion
-			if assertions = getRoleAssertions(aud, scopes, policy); assertions == nil {
-				proxywasm.LogWarnf("forbidden: scope(s) not allowed: request[%#v], expected[%#v]", scopes, policy)
-				proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: scope(s) not allowed"), -1)
-				return types.ActionPause
-			}
-			actionValue, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.actionHeader)
-			resourceValue, _ := proxywasm.GetHttpRequestHeader(ctx.plugin.resourceHeader)
-			action := strings.ToLower(actionValue)
-			resource := strings.ToLower(resourceValue)
-			proxywasm.LogDebugf("attempting to check request header: %s[%s], %s[%s]", ctx.plugin.actionHeader, action, ctx.plugin.resourceHeader, resource)
-			if !authorizePolicyAccess(aud, action, resource, assertions) {
-				proxywasm.LogWarnf("forbidden: request denied by policy: action[%s], resource[%s], assertions[%#v]", action, resource, assertions)
-				proxywasm.SendHttpResponse(403, nil, []byte("Forbidden: access denied by policy"), -1)
-				return types.ActionPause
-			}
+	var cgaerr, fgaerr error
+
+	if cgaEnabled {
+		cgaerr = checkCoarseGrainedAuthorization(ctx, aud, scopes)
+	}
+	if fgaEnabled {
+		fgaerr = checkFineGrainedAuthorization(ctx, aud, scopes)
+	}
+
+	var forbidden bool
+	var logMessage string
+
+	// The request is forbidden if all enabled authorization methods fail.
+	// If both CGA and FGA are enabled, this means access is granted if at least one succeeds (OR logic).
+	cgaAuthFailed := !cgaEnabled || cgaerr != nil
+	fgaAuthFailed := !fgaEnabled || fgaerr != nil
+	if cgaAuthFailed && fgaAuthFailed {
+		forbidden = true
+		var errs []string
+		if cgaerr != nil {
+			errs = append(errs, fmt.Sprintf("coarse-grained authorization[%s]", cgaerr))
 		}
+		if fgaerr != nil {
+			errs = append(errs, fmt.Sprintf("fine-grained authorization[%s]", fgaerr))
+		}
+		logMessage = "Forbidden: " + strings.Join(errs, ", ")
+	}
+
+	if forbidden {
+		proxywasm.LogWarn(logMessage)
+		proxywasm.SendHttpResponse(403, nil, []byte("Forbidden"), -1)
+		return types.ActionPause
 	}
 
 	return types.ActionContinue

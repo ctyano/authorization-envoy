@@ -68,19 +68,19 @@ func getRoleAssertions(audience string, scopes []string, jws *JwsPolicyPayload) 
 	if len(scopes) == 0 {
 		return nil
 	}
-	roleSet := make(map[string]Assertion)
+	roleSet := make(map[string][]Assertion)
 	for _, policy := range jws.PolicyData.Policies {
 		for _, assertion := range policy.Assertions {
-			roleSet[assertion.Role] = assertion
+			roleSet[assertion.Role] = append(roleSet[assertion.Role], assertion)
 		}
 	}
 	var assertions []Assertion
 	for _, scope := range scopes {
 		role := audience + ":role." + scope
 		if _, found := roleSet[role]; found {
-			assertion := roleSet[role]
-			proxywasm.LogDebugf("assertion found for role: request[%s], assertion[%#v]", role, assertion)
-			assertions = append(assertions, assertion)
+			roleAssertions := roleSet[role]
+			proxywasm.LogDebugf("assertion found for role[%s]: assertions[%#v]", role, roleAssertions)
+			assertions = append(assertions, roleAssertions...)
 		}
 	}
 	return assertions
@@ -91,6 +91,7 @@ func authorizePolicyAccess(audience, action, resource string, assertions []Asser
 	if len(assertions) == 0 {
 		return false
 	}
+	result := false
 	for _, a := range assertions {
 		proxywasm.LogDebugf("checking assertion with request: request{action[%s], resource[%s]}, assertion{effect[%s], action[%s], resource[%s]}", action, audience+":"+resource, a.Effect, a.Action, a.Resource)
 		validator, err := NewAssertionValidator(a.Effect, a.Action, a.Resource)
@@ -103,10 +104,69 @@ func authorizePolicyAccess(audience, action, resource string, assertions []Asser
 			validator.ActionRegexp.MatchString(strings.ToLower(action)) &&
 			validator.ResourceRegexp.MatchString(strings.ToLower(resource)) {
 			proxywasm.LogDebugf("assertion matched with request: action[%s], resource[%s], effect[%v]", action, resource, (validator.Effect == nil))
-			if validator.Effect == nil {
-				return true
+			if validator.Effect != nil {
+				// immediately return false if any deny policy was matched
+				return false
+			}
+			// return true only if there is no deny policy matched and an allow policy is matched
+			result = true
+		}
+	}
+	return result
+}
+
+func checkCoarseGrainedAuthorization(ctx *httpContext, aud string, scopes []string) error {
+	scopeSet := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		scopeSet[scope] = struct{}{}
+	}
+
+	for _, c := range ctx.plugin.constraints {
+		if c.Domain == aud {
+			if _, ok := scopeSet[c.Role]; ok {
+				matchedRole := aud + ":role." + c.Role
+				proxywasm.LogDebugf("coarse-grained authorization success: aud[%s], scope[%s]", aud, matchedRole)
+				return nil
 			}
 		}
 	}
-	return false
+
+	// Compare audience and scopes
+	return fmt.Errorf("forbidden: audience and scopes mismatch: audience[%s], scopes[%q], constraints[%#v]", aud, scopes, ctx.plugin.constraints)
+}
+
+func checkFineGrainedAuthorization(ctx *httpContext, aud string, scopes []string) error {
+	matchedJws := ctx.plugin.policy[aud]
+	if matchedJws == nil {
+		return fmt.Errorf("forbidden: audience domain[%s] not found in jws payload", aud)
+	}
+	// Compare scopes (scope and scp) with all roles in assertions
+	var assertions []Assertion
+	if assertions = getRoleAssertions(aud, scopes, matchedJws); len(assertions) == 0 {
+		return fmt.Errorf("forbidden: scope(s) not allowed: aud[%s], scopes[%q]", aud, scopes)
+	}
+	actionValue, err := getRequiredHeader(ctx.plugin.actionHeader)
+	if err != nil {
+		return err
+	}
+	resourceValue, err := getRequiredHeader(ctx.plugin.resourceHeader)
+	if err != nil {
+		return err
+	}
+	action := strings.ToLower(actionValue)
+	resource := strings.ToLower(resourceValue)
+	proxywasm.LogDebugf("attempting to check request header: %s[%s], %s[%s]", ctx.plugin.actionHeader, action, ctx.plugin.resourceHeader, resource)
+	if !authorizePolicyAccess(aud, action, resource, assertions) {
+		return fmt.Errorf("forbidden: request denied by policy: action[%s], resource[%s], assertions[%#v]", action, resource, assertions)
+	}
+	proxywasm.LogDebugf("fine-grained authorization success: aud[%s], scopes[%q], action[%s], resource[%s]", aud, scopes, action, resource)
+	return nil
+}
+
+func getRequiredHeader(headerName string) (string, error) {
+	value, err := proxywasm.GetHttpRequestHeader(headerName)
+	if err != nil || value == "" {
+		return "", fmt.Errorf("missing or empty header: %s", headerName)
+	}
+	return value, nil
 }

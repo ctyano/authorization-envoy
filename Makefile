@@ -9,7 +9,10 @@ ifneq ($(VERSION),)
 DOCKER_TAG := :v$(VERSION)
 endif
 ifeq ($(ENVOY_VERSION),)
-	ENVOY_VERSION := $(shell curl -s https://api.github.com/repos/envoyproxy/envoy/releases | jq -r .[].tag_name | sort -rV | head -n1)
+ENVOY_VERSION := $(shell curl -s https://api.github.com/repos/envoyproxy/envoy/releases | jq -r .[].tag_name | sort -rV | head -n1)
+ifeq ($(ENVOY_VERSION),)
+$(error Failed to determine ENVOY_VERSION from GitHub API. Please set it manually.)
+endif
 endif
 
 ifeq ($(PATCH),)
