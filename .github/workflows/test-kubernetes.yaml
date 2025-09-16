@@ -1,0 +1,221 @@
+name: Test running on Kubernetes Cluster
+
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+on:
+  # If any commit message in your push or the HEAD commit of your PR contains the strings
+  # [skip ci], [ci skip], [no ci], [skip actions], or [actions skip]
+  # workflows triggered on the push or pull_request events will be skipped.
+  # https://github.blog/changelog/2021-02-08-github-actions-skip-pull-request-and-push-workflows-with-skip-ci/
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+
+env:
+  # Use docker.io for Docker Hub if empty
+  DOCKER_REGISTRY_URL: ghcr.io
+  # DOCKER_REGISTRY_OWNER: ${{ env.CI_REPOSITORY_OWNER }}
+  # DOCKER_REGISTRY_IMAGE: ${{ env.CI_REPOSITORY_NAME }}
+  # DOCKER_REGISTRY_TOKEN: ${{ secrets.DOCKER_REGISTRY_TOKEN }}
+  # DOCKER_TAEGET_PLATFORMS: linux/amd64,linux/arm64
+  # DOCKER_BUILD_ARGS: |
+  GITHUB_REPOSITORY: AthenZ/athenz
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#permissions
+    permissions:
+      actions: none
+      checks: none
+      contents: read
+      deployments: none
+      issues: none
+      discussions: none
+      packages: read
+      pull-requests: none
+      repository-projects: none
+      security-events: none
+      statuses: none
+
+    steps:
+      # This action maximizes the available disk space on public shared GitHub runners
+      # https://github.com/easimon/maximize-build-space
+      - 
+        name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: '30720'
+          temp-reserve-mb: '1024'
+          swap-size-mb: '8192'
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+ 
+      # A GitHub Action to expose useful environment variables.
+      # https://github.com/FranzDiebold/github-env-vars-action
+      -
+        name: GitHub Environment Variables Action
+        id: env
+        # uses: https://github.com/FranzDiebold/github-env-vars-action/tags
+        uses: FranzDiebold/github-env-vars-action@v2
+
+      # A GitHub Action to prepare default environment variables.
+      -
+        name: Set Default Environment Variables
+        id: default_env
+        run: |
+          # Use docker.io for Docker Hub if empty
+          [[ "${{ env.DOCKER_REGISTRY_URL}}" = "" ]] && echo "DOCKER_REGISTRY_URL=docker.io" >> $GITHUB_ENV
+          [[ "${{ env.DOCKER_REGISTRY_OWNER }}" = "" ]] && echo "DOCKER_REGISTRY_OWNER=${{ env.CI_REPOSITORY_OWNER }}" >> $GITHUB_ENV
+          [[ "${{ env.DOCKER_REGISTRY_IMAGE }}" = "" ]] && echo "DOCKER_REGISTRY_IMAGE=${{ env.CI_REPOSITORY_NAME }}" >> $GITHUB_ENV
+          [[ "${{ secrets.DOCKER_REGISTRY_TOKEN }}" = "" ]] && echo "DOCKER_REGISTRY_URL=ghcr.io" >> $GITHUB_ENV
+          [[ "${{ secrets.DOCKER_REGISTRY_TOKEN }}" = "" ]] && echo "DOCKER_REGISTRY_OWNER=${{ env.CI_REPOSITORY_OWNER }}" >> $GITHUB_ENV
+          [[ "${{ secrets.DOCKER_REGISTRY_TOKEN }}" = "" ]] && echo "DOCKER_REGISTRY_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV || echo "DOCKER_REGISTRY_TOKEN=${{ secrets.DOCKER_REGISTRY_TOKEN }}" >> $GITHUB_ENV
+
+      # This action checks-out your repository under $GITHUB_WORKSPACE, so your workflow can access it.
+      # https://github.com/actions/checkout
+      -
+        name: Checkout repository
+        id: checkout
+        # You may pin to the exact commit or the version.
+        # uses: https://github.com/actions/checkout/tags
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      # GitHub Action to login against a Docker registry.
+      # Login against a Docker registry except on PR
+      # https://github.com/docker/login-action
+      -
+        name: Docker Login to registry ${{ env.DOCKER_REGISTRY_URL }}
+        id: login
+        # You may pin to the exact commit or the version.
+        # uses: https://github.com/docker/login-action/tags
+        uses: docker/login-action@v3
+        with:
+          # Server address of Docker registry. If not set then will default to Docker Hub
+          registry: ${{ env.DOCKER_REGISTRY_URL }} # optional
+          # Username used to log against the Docker registry
+          username: ${{ env.DOCKER_REGISTRY_OWNER }} # optional
+          # Password or personal access token used to log against the Docker registry
+          password: ${{ env.DOCKER_REGISTRY_TOKEN }} # optional
+          # Log out from the Docker registry at the end of a job
+          logout: true # optional, default is true
+
+      # This action sets up a go environment for use in actions by:
+      # - Optionally downloading and caching a version of Go by version and adding to PATH.
+      # - Registering problem matchers for error output.
+      # https://github.com/actions/setup-go
+      -
+        name: Setup Golang
+        id: setup-go
+        # You may pin to the exact commit or the version.
+        # uses: https://github.com/actions/setup-go/tags
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+
+      # A GitHub Action to set environment variables for Go
+      -
+        name: Set Golang env
+        id: go-env
+        run: |
+          go env | grep GOPATH | sed -e "s/'//g" >> $GITHUB_ENV
+
+      # A GitHub Action for Kubernetes IN Docker
+      # https://github.com/helm/kind-action
+      -
+        name: Create KinD Cluster
+        id: kind
+        # You may pin to the exact commit or the version.
+        # uses: https://github.com/helm/kind-action/tags
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: kind
+
+      # A GitHub Action to pull container images
+      -
+        name: Pull container images
+        run: |
+          set -ex
+          make load-docker-images
+
+      # A GitHub Action to prepare default environment variables.
+      -
+        name: Set dynamic docker build arguments
+        id: dynamic_docker_build_args
+        run: |
+          LATEST_TAG=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${TRACKING_GIT_REPO_MAIN}/releases \
+            | jq -r '.[].tag_name' \
+            | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-z]+)?(\.[0-9]+)?$' \
+            | sort -ruV \
+            | head -n1)
+          if [[ "${{ env.CI_REF }}" == "refs/tags/"* ]]; then
+            TAG_VERSION="$(git tag --points-at HEAD)"
+          else
+            MODULE_HASH="$( \
+              curl -s https://api.github.com/repos/${{ env.TRACKING_GIT_REPO_SUB }}/commits \
+                | jq -r .[0].sha \
+                | cut -c -7
+              )"
+            TAG_VERSION="${LATEST_TAG}-${MODULE_HASH}"
+          fi
+          VERSION=$(echo ${TAG_VERSION} | sed -E 's/^v(.*)/\1/')
+
+          # here we can place the command that will generate multi-line text
+          echo "DOCKER_BUILD_ARGS<<EOF" >> $GITHUB_ENV
+          printf "${{ env.DOCKER_BUILD_ARGS }}" >> $GITHUB_ENV
+          printf "ENVOY_VERSION=${LATEST_TAG}\n" >> $GITHUB_ENV
+          printf "MODULE_HASH=${MODULE_HASH}\n" >> $GITHUB_ENV
+          printf "VERSION=${VERSION}\n" >> $GITHUB_ENV
+          printf "TAG_VERSION=${TAG_VERSION}\n" >> $GITHUB_ENV
+          printf "VCS_REF=${TAG_VERSION}\n" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+          echo "ENVOY_VERSION=${LATEST_TAG}" >> $GITHUB_ENV
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "DOCKER_TAG=:${TAG_VERSION}" >> $GITHUB_ENV
+
+      # Build Docker image
+      -
+        name: Build Docker container images
+        id: build
+        run: |
+          set -ex
+          make build
+
+      # A GitHub Action to load container images to KinD cluster
+      -
+        name: Load container images to KinD cluster
+        run: |
+          set -ex
+          df -h
+          make load-kubernetes-images
+
+      # A GitHub Action to deploy application to a Kubernetes cluster
+      -
+        name: Deploy Application
+        run: |
+          set -ex
+          make deploy-kubernetes-manifests
+
+      # A GitHub Action to check and test application
+      -
+        name: Run Tests for Deployed Application
+        run: |
+          # Run tests against your deployed application in KinD
+          # Replace this with your test command
+          make test-kubernetes-crypki-softhsm test-kubernetes-athenz-oauth2
+
