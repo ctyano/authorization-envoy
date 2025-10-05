@@ -100,7 +100,6 @@ install-pathman:
 printf '%s\n' ":$$PATH:" | grep -q "$$HOME/.local/bin" \
 || export PATH="$$PATH:$$HOME/.local/bin"
 
-
 install-jq: install-pathman
 	which jq \
 || (curl -sf https://webi.sh/jq | sh \
@@ -125,7 +124,8 @@ install-kustomize: install-pathman
 	which kustomize \
 || (cd ~/.local/bin \
 && curl "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash \
-&& ~/.local/bin/pathman add ~/.local/bin)
+&& ~/.local/bin/pathman add ~/.local/bin \
+|| export PATH="$$PATH:$$HOME/.local/bin")
 
 install-parsers: install-jq install-yq install-step
 
