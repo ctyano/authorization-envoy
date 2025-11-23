@@ -217,5 +217,5 @@ jobs:
         run: |
           # Run tests against your deployed application in KinD
           # Replace this with your test command
-          make test-kubernetes-crypki-softhsm test-kubernetes-athenz-oauth2
+          make test-kubernetes-authorization-envoy
 

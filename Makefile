@@ -188,9 +188,9 @@ i=0; \
 while true; do \
 	printf "\n***** Waiting for crypki($$(( $$i * $${SLEEP_SECONDS} ))s/$${WAITING_THRESHOLD}s) *****\n"; \
 	( \
-	test $$(( $$(kubectl -n certsigner get all | grep certsigner-envoy | grep -E "0/1" | wc -l) )) -eq 0 \
+	test $$(( $$(kubectl -n athenz get all | grep authorization-envoy | grep -E "0/1" | wc -l) )) -eq 0 \
 	&& \
-	kubectl -n certsigner exec deployment/certsigner-envoy -it -c athenz-cli -- \
+	kubectl -n athenz exec deployment/authorization-envoy -it -c athenz-cli -- \
 		curl \
 			-s \
 			--fail \
@@ -210,13 +210,13 @@ while true; do \
 	i=$$(( i + 1 )); \
 	if [ $$i -eq $$(( $${WAITING_THRESHOLD} / $${SLEEP_SECONDS} )) ]; then \
 		printf "\n\n** Waiting ($$(( $$i * $${SLEEP_SECONDS} ))s) reached to threshold($${WAITING_THRESHOLD}s) **\n\n"; \
-		kubectl -n certsigner get all | grep -E "pod/certsigner-envoy-" | sed -e 's/^\(pod\/[^ ]*\) *[0-9]\/[0-9].*/\1/g' | xargs -I%% kubectl -n certsigner logs %% --all-containers=true ||:; \
-		kubectl -n certsigner get all | grep -E "pod/certsigner-envoy-" | sed -e 's/^\(pod\/[^ ]*\) *[0-9]\/[0-9].*/\1/g' | xargs -I%% kubectl -n certsigner describe %% ||:; \
-		kubectl -n certsigner get all; \
+		kubectl -n athenz get all | grep -E "pod/authorization-envoy-" | sed -e 's/^\(pod\/[^ ]*\) *[0-9]\/[0-9].*/\1/g' | xargs -I%% kubectl -n athenz logs %% --all-containers=true ||:; \
+		kubectl -n athenz get all | grep -E "pod/authorization-envoy-" | sed -e 's/^\(pod\/[^ ]*\) *[0-9]\/[0-9].*/\1/g' | xargs -I%% kubectl -n athenz describe %% ||:; \
+		kubectl -n athenz get all; \
 		exit 1; \
 	fi; \
 done
-	kubectl -n certsigner get all
+	kubectl -n athenz get all
 	@echo ""
 	@echo "**************************************"
 	@echo "***  Crypki provisioning successful **"
@@ -272,7 +272,6 @@ copy-certificates-to-kustomization:
 	)
 
 clean-kubernetes-athenz: clean-certificates
-	@DOCKER_REGISTRY=$(DOCKER_REGISTRY) $(MAKE) -C kubernetes clean
 
 load-docker-images: load-docker-images-internal load-docker-images-external
 
@@ -299,24 +298,12 @@ load-docker-images-external:
 	docker pull docker.io/portainer/kubectl-shell:latest
 	docker pull docker.io/tatyano/authorization-proxy:latest
 
-load-kubernetes-images: version install-kustomize
-	@DOCKER_REGISTRY=$(DOCKER_REGISTRY) $(MAKE) -C kubernetes kind-load-images
+load-kubernetes-images: version install-kustomize load-docker-images load-kubernetes-images
 
-deploy-kubernetes-athenz: generate-certificates
-	@DOCKER_REGISTRY=$(DOCKER_REGISTRY) $(MAKE) -C kubernetes deploy-athenz
+deploy-kubernetes-athenz: generate-certificates deploy-kubernetes-manifests
 
 check-kubernetes-athenz: install-parsers
 	@DOCKER_REGISTRY=$(DOCKER_REGISTRY) $(MAKE) -C kubernetes check-athenz
-
-test-kubernetes-athenz: install-parsers
-	@DOCKER_REGISTRY=$(DOCKER_REGISTRY) $(MAKE) -C kubernetes test-athenz
-
-test-athenz-servers: test-athenz-zms-server test-athenz-zts-server
-	@echo ""
-	@echo "**************************************"
-	@echo "***** Athenz APIs are functioning ****"
-	@echo "**************************************"
-	@echo ""
 
 clean-docker-athenz: clean-certificates
 	@VERSION=$(VERSION) $(MAKE) -C docker clean-athenz
