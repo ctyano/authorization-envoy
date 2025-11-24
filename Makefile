@@ -129,59 +129,80 @@ install-kustomize: install-pathman
 
 install-parsers: install-jq install-yq install-step
 
+clean-certificates:
+	rm -rf keys certs
 
-kind-setup:
-	kind create cluster
+generate-ca:
+	mkdir keys certs ||:
+	openssl genrsa -out keys/ca.private.pem 4096
+	openssl rsa -pubout -in keys/ca.private.pem -out keys/ca.public.pem
+	openssl req -new -x509 -days 99999 -config openssl/ca.openssl.config -extensions ext_req -key keys/ca.private.pem -out certs/ca.cert.pem
 
-kind-load-images:
+generate-zms: generate-ca
+	mkdir keys certs ||:
+	openssl genrsa -out keys/zms.private.pem 4096
+	openssl rsa -pubout -in keys/zms.private.pem -out keys/zms.public.pem
+	openssl req -config openssl/zms.openssl.config -new -key keys/zms.private.pem -out certs/zms.csr.pem -extensions ext_req
+	openssl x509 -req -in certs/zms.csr.pem -CA certs/ca.cert.pem -CAkey keys/ca.private.pem -CAcreateserial -out certs/zms.cert.pem -days 99999 -extfile openssl/zms.openssl.config -extensions ext_req
+	openssl verify -CAfile certs/ca.cert.pem certs/zms.cert.pem
+
+generate-zts: generate-zms
+	mkdir keys certs ||:
+	openssl genrsa -out keys/zts.private.pem 4096
+	openssl rsa -pubout -in keys/zts.private.pem -out keys/zts.public.pem
+	openssl req -config openssl/zts.openssl.config -new -key keys/zts.private.pem -out certs/zts.csr.pem -extensions ext_req
+	openssl x509 -req -in certs/zts.csr.pem -CA certs/ca.cert.pem -CAkey keys/ca.private.pem -CAcreateserial -out certs/zts.cert.pem -days 99999 -extfile openssl/zts.openssl.config -extensions ext_req
+	openssl verify -CAfile certs/ca.cert.pem certs/zts.cert.pem
+
+generate-admin: generate-ca
+	mkdir keys certs ||:
+	openssl genrsa -out keys/athenz_admin.private.pem 4096
+	openssl rsa -pubout -in keys/athenz_admin.private.pem -out keys/athenz_admin.public.pem
+	openssl req -config openssl/athenz_admin.openssl.config -new -key keys/athenz_admin.private.pem -out certs/athenz_admin.csr.pem -extensions ext_req
+	openssl x509 -req -in certs/athenz_admin.csr.pem -CA certs/ca.cert.pem -CAkey keys/ca.private.pem -CAcreateserial -out certs/athenz_admin.cert.pem -days 99999 -extfile openssl/athenz_admin.openssl.config -extensions ext_req
+	openssl verify -CAfile certs/ca.cert.pem certs/athenz_admin.cert.pem
+
+generate-certificates: generate-ca generate-zms generate-zts generate-admin
+
+copy-certificates-to-kustomization:
+	( \
+	cp -r ../keys ../certs kustomize/ && \
+	echo "APPLIED copy-certificates-to-kustomization" \
+	)
+
+load-docker-images: load-docker-images-internal load-docker-images-external
+
+load-docker-images-internal:
+	docker pull $(DOCKER_REGISTRY)athenz-db:latest
+	docker pull $(DOCKER_REGISTRY)athenz-zms-server:latest
+	docker pull $(DOCKER_REGISTRY)athenz-zts-server:latest
+	docker pull $(DOCKER_REGISTRY)athenz-cli:latest
+
+load-docker-images-external:
+	docker pull $(DOCKER_REGISTRY)athenz-plugins:latest
+	docker pull $(DOCKER_REGISTRY)k8s-athenz-sia:latest
+	docker pull docker.io/ealen/echo-server:latest
+
+load-kubernetes-images:
 	kubectl config get-contexts kind-kind --no-headers=true | grep -E "^\* +kind-kind"
-	kind load docker-image \
-		docker.io/ghostunnel/ghostunnel:latest \
-		$(DOCKER_REGISTRY)crypki-softhsm:latest \
-		$(DOCKER_REGISTRY)certsigner-envoy:latest \
-		$(DOCKER_REGISTRY)athenz_user_cert:latest \
-		$(DOCKER_REGISTRY)athenz-plugins:latest
 	kind load docker-image \
 		$(DOCKER_REGISTRY)athenz-db:latest \
 		$(DOCKER_REGISTRY)athenz-zms-server:latest \
 		$(DOCKER_REGISTRY)athenz-zts-server:latest \
 		$(DOCKER_REGISTRY)athenz-cli:latest \
-		$(DOCKER_REGISTRY)athenz-ui:latest
-	kind load docker-image \
-		docker.io/ealen/echo-server:latest \
-		docker.io/dexidp/dex:latest \
-		docker.io/envoyproxy/envoy:v1.34-latest \
-		docker.io/openpolicyagent/kube-mgmt:latest \
-		docker.io/openpolicyagent/opa:latest-static \
-		docker.io/portainer/kubectl-shell:latest \
-		$(DOCKER_REGISTRY)k8s-athenz-sia:latest \
-		$(DOCKER_REGISTRY)docker-vegeta:latest \
-		docker.io/tatyano/authorization-proxy:latest
-
-kind-shutdown:
-	kind delete cluster
-
-load-docker-images:
-	docker pull docker.io/ghostunnel/ghostunnel:latest
-	docker pull $(DOCKER_REGISTRY)crypki-softhsm:latest
-	docker pull $(DOCKER_REGISTRY)athenz_user_cert:latest
-	docker pull docker.io/ealen/echo-server:latest
-	docker pull docker.io/dexidp/dex:latest
-
-load-kubernetes-images:
-	kubectl config get-contexts kind-kind --no-headers=true | grep -E "^\* +kind-kind"
-	kind load docker-image \
-		docker.io/ghostunnel/ghostunnel:latest \
-		$(DOCKER_REGISTRY)crypki-softhsm:latest \
 		$(DOCKER_REGISTRY)$(APP_NAME):latest \
-		$(DOCKER_REGISTRY)athenz_user_cert:latest \
 		docker.io/ealen/echo-server:latest \
-		docker.io/dexidp/dex:latest
+
+check-kubernetes-athenz: install-parsers
+	@DOCKER_REGISTRY=$(DOCKER_REGISTRY) $(MAKE) -C kubernetes check-athenz
+
+clean-docker-athenz: clean-certificates
+	@VERSION=$(VERSION) $(MAKE) -C docker clean-athenz
 
 deploy-kubernetes-manifests: generate-certificates copy-certificates-to-kustomization
 	kubectl apply -k kustomize
 
-test-kubernetes-authorization-envoy:
+test-kubernetes-manifests:
 	SLEEP_SECONDS=5; \
 WAITING_THRESHOLD=60; \
 i=0; \
@@ -219,93 +240,7 @@ done
 	kubectl -n athenz get all
 	@echo ""
 	@echo "**************************************"
-	@echo "***  Crypki provisioning successful **"
+	@echo "**** App provisioned successfully ****"
 	@echo "**************************************"
 	@echo ""
-
-clean-certificates:
-	rm -rf keys certs
-
-generate-ca:
-	mkdir keys certs ||:
-	openssl genrsa -out keys/ca.private.pem 4096
-	openssl rsa -pubout -in keys/ca.private.pem -out keys/ca.public.pem
-	openssl req -new -x509 -days 99999 -config openssl/ca.openssl.config -extensions ext_req -key keys/ca.private.pem -out certs/ca.cert.pem
-
-generate-zms: generate-ca
-	mkdir keys certs ||:
-	openssl genrsa -out keys/zms.private.pem 4096
-	openssl rsa -pubout -in keys/zms.private.pem -out keys/zms.public.pem
-	openssl req -config openssl/zms.openssl.config -new -key keys/zms.private.pem -out certs/zms.csr.pem -extensions ext_req
-	openssl x509 -req -in certs/zms.csr.pem -CA certs/ca.cert.pem -CAkey keys/ca.private.pem -CAcreateserial -out certs/zms.cert.pem -days 99999 -extfile openssl/zms.openssl.config -extensions ext_req
-	openssl verify -CAfile certs/ca.cert.pem certs/zms.cert.pem
-
-generate-zts: generate-zms
-	mkdir keys certs ||:
-	openssl genrsa -out keys/zts.private.pem 4096
-	openssl rsa -pubout -in keys/zts.private.pem -out keys/zts.public.pem
-	openssl req -config openssl/zts.openssl.config -new -key keys/zts.private.pem -out certs/zts.csr.pem -extensions ext_req
-	openssl x509 -req -in certs/zts.csr.pem -CA certs/ca.cert.pem -CAkey keys/ca.private.pem -CAcreateserial -out certs/zts.cert.pem -days 99999 -extfile openssl/zts.openssl.config -extensions ext_req
-	openssl verify -CAfile certs/ca.cert.pem certs/zts.cert.pem
-
-generate-admin: generate-ca
-	mkdir keys certs ||:
-	openssl genrsa -out keys/athenz_admin.private.pem 4096
-	openssl rsa -pubout -in keys/athenz_admin.private.pem -out keys/athenz_admin.public.pem
-	openssl req -config openssl/athenz_admin.openssl.config -new -key keys/athenz_admin.private.pem -out certs/athenz_admin.csr.pem -extensions ext_req
-	openssl x509 -req -in certs/athenz_admin.csr.pem -CA certs/ca.cert.pem -CAkey keys/ca.private.pem -CAcreateserial -out certs/athenz_admin.cert.pem -days 99999 -extfile openssl/athenz_admin.openssl.config -extensions ext_req
-	openssl verify -CAfile certs/ca.cert.pem certs/athenz_admin.cert.pem
-
-generate-crypki: generate-ca
-	mkdir keys certs ||:
-	openssl genrsa -out - 4096 | openssl pkey -out keys/crypki.private.pem
-	openssl req -config openssl/crypki.openssl.config -new -key keys/crypki.private.pem -out certs/crypki.csr.pem -extensions ext_req
-	openssl x509 -req -in certs/crypki.csr.pem -CA certs/ca.cert.pem -CAkey keys/ca.private.pem -CAcreateserial -out certs/crypki.cert.pem -days 99999 -extfile openssl/crypki.openssl.config -extensions ext_req
-	openssl verify -CAfile certs/ca.cert.pem certs/crypki.cert.pem
-
-generate-certificates: generate-ca generate-zms generate-zts generate-admin generate-ui generate-identityprovider generate-crypki
-
-copy-certificates-to-kustomization:
-	( \
-	cp -r ../keys ../certs kustomize/ && \
-	echo "APPLIED copy-certificates-to-kustomization" \
-	)
-
-clean-kubernetes-athenz: clean-certificates
-
-load-docker-images: load-docker-images-internal load-docker-images-external
-
-load-docker-images-internal:
-	docker pull $(DOCKER_REGISTRY)athenz-db:latest
-	docker pull $(DOCKER_REGISTRY)athenz-zms-server:latest
-	docker pull $(DOCKER_REGISTRY)athenz-zts-server:latest
-	docker pull $(DOCKER_REGISTRY)athenz-cli:latest
-	docker pull $(DOCKER_REGISTRY)athenz-ui:latest
-
-load-docker-images-external:
-	docker pull $(DOCKER_REGISTRY)athenz-plugins:latest
-	docker pull $(DOCKER_REGISTRY)athenz_user_cert:latest
-	docker pull $(DOCKER_REGISTRY)certsigner-envoy:latest
-	docker pull $(DOCKER_REGISTRY)crypki-softhsm:latest
-	docker pull $(DOCKER_REGISTRY)docker-vegeta:latest
-	docker pull $(DOCKER_REGISTRY)k8s-athenz-sia:latest
-	docker pull docker.io/dexidp/dex:latest
-	docker pull docker.io/ealen/echo-server:latest
-	docker pull docker.io/envoyproxy/envoy:v1.34-latest
-	docker pull docker.io/ghostunnel/ghostunnel:latest
-	docker pull docker.io/openpolicyagent/kube-mgmt:latest
-	docker pull docker.io/openpolicyagent/opa:latest-static
-	docker pull docker.io/portainer/kubectl-shell:latest
-	docker pull docker.io/tatyano/authorization-proxy:latest
-
-load-kubernetes-images: version install-kustomize load-docker-images load-kubernetes-images
-
-deploy-kubernetes-athenz: generate-certificates deploy-kubernetes-manifests
-
-check-kubernetes-athenz: install-parsers
-	@DOCKER_REGISTRY=$(DOCKER_REGISTRY) $(MAKE) -C kubernetes check-athenz
-
-clean-docker-athenz: clean-certificates
-	@VERSION=$(VERSION) $(MAKE) -C docker clean-athenz
-
 
