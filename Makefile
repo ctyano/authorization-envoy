@@ -166,7 +166,7 @@ generate-certificates: generate-ca generate-zms generate-zts generate-admin
 
 copy-certificates-to-kustomization:
 	( \
-	cp -r ../keys ../certs kustomize/ && \
+	cp -r keys certs kustomize/ && \
 	echo "APPLIED copy-certificates-to-kustomization" \
 	)
 
